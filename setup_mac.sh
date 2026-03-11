@@ -3,13 +3,20 @@
 
 set -e
 
-# Install otx in editable mode (without resolving deps, since decord has no macOS ARM wheels)
+# Install otx in editable mode without resolving deps.
+# since decord==0.6.0 has no macOS ARM wheels so the installation fails.
+#  -> video I/O uses cv2.VideoCapture instead.
+echo "Installing otx (editable, no-deps)"
 cd lib
 uv pip install -e ".[dev]" --no-deps
 cd ..
 
-# install core dependencies
-echo "Installing core dependencies..."
+# Downgrade setuptools before anything else (v82+ removed pkg_resources needed by anomalib)
+echo "Fixing setuptools for pkg_resources"
+uv pip install "setuptools<81"
+
+# Install core OTX dependencies
+echo "Installing core dependencies"
 uv pip install \
     datumaro==1.10.0 \
     lightning==2.4.0 \
@@ -20,10 +27,17 @@ uv pip install \
     onnx==1.17.0 \
     onnxconverter-common==1.16.0
 
-
-uv pip install "setuptools<81"
-
 # Tracker dependencies
+echo "Installing tracker dependencies"
 uv pip install numpy scipy lap cython-bbox
+
+# Notebook / training dependencies
+echo "Installing notebook & training dependencies"
+uv pip install \
+    jupyter \
+    ipykernel \
+    ipywidgets \
+    matplotlib \
+    pycocotools
 
 echo "Setup done!"
