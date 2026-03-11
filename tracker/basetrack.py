@@ -16,6 +16,7 @@ class BaseTrack(object):
     is_activated = False
     state = TrackState.New
 
+    # TODO - pre-commit checks are off, but we need to add type annotations for this. (mypy nd ruff)
     history = OrderedDict()
     features = []
     curr_feature = None
