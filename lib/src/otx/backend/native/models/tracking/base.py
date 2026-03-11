@@ -1,0 +1,218 @@
+# Copyright (C) 2024 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+"""Base class for multi-object trackers in OTX."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import cv2
+import numpy as np
+import torch
+
+from otx.backend.native.tools.video import draw_detections, preprocess_frame, to_h264
+
+if TYPE_CHECKING:
+    from otx.backend.native.models.detection.base import OTXDetectionModel
+
+# TODO:
+# - move tracker/ into this module
+# - Class-aware tracking: separate association per class to prevent cross-class ID switches
+# can add ReID feature extraction  and camera-motion compensation
+# it would be good to have motion tails and per-class coloring in addition to per-track-ID coloring
+# add recipes- OTXEngine.from_model_name() support with recipe YAMLs for train+track workflow
+
+
+class OTXTracker(ABC):
+    """Base class for multi-object trackers.
+
+    A tracker is detector-agnostic. It takes per-frame detections from any
+    OTXDetectionModel and associates them across frames to produce consistent
+    track IDs.
+
+    Args:
+        track_thresh: Confidence threshold for primary association.
+        track_buffer: Number of frames to keep lost tracks alive.
+        match_thresh: IoU threshold for matching detections to tracks.
+    """
+
+    def __init__(
+        self,
+        track_thresh: float = 0.5,
+        track_buffer: int = 30,
+        match_thresh: float = 0.8,
+    ) -> None:
+        self.track_thresh = track_thresh
+        self.track_buffer = track_buffer
+        self.match_thresh = match_thresh
+        self._tracker_impl: Any = None
+
+    @abstractmethod
+    def _create_tracker(self) -> Any:
+        """Create the underlying tracker implementation."""
+
+    @property
+    def tracker(self) -> Any:
+        """Lazy-init tracker on first access."""
+        if self._tracker_impl is None:
+            self._tracker_impl = self._create_tracker()
+        return self._tracker_impl
+
+    def reset(self) -> None:
+        """Reset tracker state (call between videos)."""
+        self._tracker_impl = None
+
+    @abstractmethod
+    def update(
+        self,
+        bboxes: np.ndarray,
+        scores: np.ndarray,
+        labels: np.ndarray,
+        img_h: int,
+        img_w: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Update tracker with a single frame's detections.
+
+        Args:
+            bboxes: (N, 4) array of [x1, y1, x2, y2].
+            scores: (N,) detection scores.
+            labels: (N,) class labels.
+            img_h: Image height.
+            img_w: Image width.
+
+        Returns:
+            Tuple of (bboxes, scores, labels, track_ids) for active tracks.
+        """
+
+    def track_frame(
+        self,
+        model: OTXDetectionModel,
+        frame_bgr: np.ndarray,
+        device: str | torch.device = "cpu",
+    ) -> dict[str, np.ndarray]:
+        """Run detection + tracking on a single BGR frame.
+
+        Args:
+            model: Any OTX detection model (YOLOX, RTDETR, SSD, etc.).
+            frame_bgr: Input frame in BGR format.
+            device: Device the model is on.
+
+        Returns:
+            Dict with keys: bboxes, scores, labels, track_ids (all numpy).
+        """
+        batch = preprocess_frame(frame_bgr, model, device)
+
+        with torch.no_grad():
+            preds = model.predict_step(batch, batch_idx=0)
+
+        bboxes = preds.bboxes[0].cpu().numpy()
+        scores = preds.scores[0].cpu().numpy()
+        labels = preds.labels[0].cpu().numpy()
+
+        ori_h, ori_w = frame_bgr.shape[:2]
+        t_bboxes, t_scores, t_labels, t_ids = self.update(
+            bboxes,
+            scores,
+            labels,
+            img_h=ori_h,
+            img_w=ori_w,
+        )
+
+        return {
+            "bboxes": t_bboxes,
+            "scores": t_scores,
+            "labels": t_labels,
+            "track_ids": t_ids,
+        }
+
+    def track(
+        self,
+        model: OTXDetectionModel,
+        video_path: str | Path,
+        output_dir: str | Path = "videos/tracked",
+        device: str | torch.device = "cpu",
+        conf_thresh: float = 0.3,
+        class_names: list[str] | None = None,
+    ) -> Path:
+        """Run detection + tracking on a video and save the result.
+
+        Args:
+            model: Any OTX detection model in eval mode.
+            video_path: Path to input video.
+            output_dir: Directory for output video.
+            device: Device the model is on.
+            conf_thresh: Confidence threshold for visualization.
+            class_names: Optional class names for labels.
+
+        Returns:
+            Path to saved H.264 video.
+        """
+        video_path = Path(video_path)
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        cap = cv2.VideoCapture(str(video_path))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        w_orig = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h_orig = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        raw_path = output_dir / f"{video_path.stem}_raw.mp4"
+        h264_path = output_dir / f"{video_path.stem}.mp4"
+        writer = cv2.VideoWriter(
+            str(raw_path),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps,
+            (w_orig, h_orig),
+        )
+
+        self.reset()
+
+        frame_idx = 0
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            batch = preprocess_frame(frame, model, device)
+
+            with torch.no_grad():
+                preds = model.predict_step(batch, batch_idx=0)
+
+            bboxes = preds.bboxes[0].cpu().numpy()
+            scores = preds.scores[0].cpu().numpy()
+            labels = preds.labels[0].cpu().numpy()
+
+            t_bboxes, t_scores, t_labels, t_ids = self.update(
+                bboxes,
+                scores,
+                labels,
+                img_h=h_orig,
+                img_w=w_orig,
+            )
+
+            draw_detections(
+                frame,
+                t_bboxes,
+                t_scores,
+                labels=t_labels,
+                track_ids=t_ids,
+                class_names=class_names,
+                conf_thresh=conf_thresh,
+            )
+
+            writer.write(frame)
+            frame_idx += 1
+            if frame_idx % 50 == 0:
+                print(f"  {frame_idx}/{total} frames")
+
+        cap.release()
+        writer.release()
+
+        to_h264(raw_path, h264_path)
+        raw_path.unlink()
+        print(f"Saved: {h264_path} ({frame_idx} frames)")
+        return h264_path
