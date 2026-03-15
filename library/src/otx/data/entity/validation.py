@@ -151,6 +151,24 @@ def validate_scores(scores_batch: list[torch.Tensor | None]) -> None:
         raise ValueError(msg)
 
 
+def validate_track_ids(track_ids_batch: list[torch.Tensor | None]) -> None:
+    """Validate the track IDs batch."""
+    if all(tid is None for tid in track_ids_batch):
+        return
+    first_non_none = next((tid for tid in track_ids_batch if tid is not None), None)
+    if first_non_none is None:
+        return
+    if not isinstance(first_non_none, torch.Tensor):
+        msg = f"Track IDs batch must be a list of torch tensors. Got {type(first_non_none)}"
+        raise TypeError(msg)
+    if first_non_none.dtype != torch.long:
+        msg = f"Track IDs batch must have dtype torch.long. Got {first_non_none.dtype}"
+        raise ValueError(msg)
+    if first_non_none.ndim != 1:
+        msg = "Track IDs batch must be 1-dimensional"
+        raise ValueError(msg)
+
+
 def validate_feature_vectors(
     feature_vector_batch: list[torch.Tensor | np.ndarray | None],
 ) -> None:

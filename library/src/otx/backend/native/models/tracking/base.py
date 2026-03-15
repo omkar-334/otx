@@ -12,8 +12,10 @@ from typing import TYPE_CHECKING, Any
 import cv2
 import numpy as np
 import torch
+from torchvision.tv_tensors import BoundingBoxes
 
 from otx.backend.native.tools.video import draw_detections, preprocess_frame, to_h264
+from otx.data.entity import OTXPredictionBatch
 
 if TYPE_CHECKING:
     from otx.backend.native.models.detection.base import OTXDetectionModel
@@ -92,7 +94,7 @@ class OTXTracker(ABC):
         model: OTXDetectionModel,
         frame_bgr: np.ndarray,
         device: str | torch.device = "cpu",
-    ) -> dict[str, np.ndarray]:
+    ) -> OTXPredictionBatch:
         """Run detection + tracking on a single BGR frame.
 
         Args:
@@ -101,7 +103,7 @@ class OTXTracker(ABC):
             device: Device the model is on.
 
         Returns:
-            Dict with keys: bboxes, scores, labels, track_ids (all numpy).
+            OTXPredictionBatch with bboxes, scores, labels, and track_ids.
         """
         batch = preprocess_frame(frame_bgr, model, device)
 
@@ -121,12 +123,21 @@ class OTXTracker(ABC):
             img_w=ori_w,
         )
 
-        return {
-            "bboxes": t_bboxes,
-            "scores": t_scores,
-            "labels": t_labels,
-            "track_ids": t_ids,
-        }
+        return OTXPredictionBatch(
+            batch_size=1,
+            images=preds.images,
+            imgs_info=preds.imgs_info,
+            bboxes=[
+                BoundingBoxes(
+                    torch.from_numpy(t_bboxes).float(),
+                    format="XYXY",
+                    canvas_size=(ori_h, ori_w),
+                )
+            ],
+            scores=[torch.from_numpy(t_scores).float()],
+            labels=[torch.from_numpy(t_labels).long()],
+            track_ids=[torch.from_numpy(t_ids).long()],
+        )
 
     def track(
         self,

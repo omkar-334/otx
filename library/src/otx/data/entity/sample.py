@@ -39,6 +39,7 @@ from otx.data.entity.validation import (
     validate_labels,
     validate_masks,
     validate_scores,
+    validate_track_ids,
 )
 
 if TYPE_CHECKING:
@@ -330,6 +331,7 @@ class OTXPredictionBatch(OTXSampleBatch):
     """
 
     scores: list[torch.Tensor] | None = None
+    track_ids: list[torch.Tensor] | None = None
     feature_vector: list[torch.Tensor] | None = None
     saliency_map: list[torch.Tensor] | None = None
 
@@ -338,6 +340,8 @@ class OTXPredictionBatch(OTXSampleBatch):
         super().__post_init__()
         if self.scores is not None:
             validate_scores(self.scores)
+        if self.track_ids is not None:
+            validate_track_ids(self.track_ids)
         if self.feature_vector is not None:
             validate_feature_vectors(self.feature_vector)
 
