@@ -186,6 +186,7 @@ class OTXPredBatch(OTXDataBatch):
     """Torch prediction data item batch implementation."""
 
     scores: list[torch.Tensor] | None = None
+    track_ids: list[torch.Tensor] | None = None
     feature_vector: list[torch.Tensor] | None = None
     saliency_map: list[torch.Tensor] | None = None
 

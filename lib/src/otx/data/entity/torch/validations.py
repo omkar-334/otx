@@ -183,6 +183,7 @@ class ValidateBatchMixin:
             "images": self._images_validator,
             "labels": self._labels_validator,
             "scores": self._scores_validator,
+            "track_ids": self._track_ids_validator,
             "feature_vector": self._feature_vectors_validator,
             "saliency_map": self._saliency_maps_validator,
             "masks": self._masks_validator,
@@ -269,6 +270,22 @@ class ValidateBatchMixin:
             msg = "Scores batch must have 1 or 2 dimensions"
             raise ValueError(msg)
         return scores_batch
+
+    @staticmethod
+    def _track_ids_validator(track_ids_batch: list[torch.Tensor | None]) -> list[torch.Tensor]:
+        """Validate the track IDs batch."""
+        if all(tid is None for tid in track_ids_batch):
+            return []
+        if not isinstance(track_ids_batch, list) or not isinstance(track_ids_batch[0], torch.Tensor):
+            msg = f"Track IDs batch must be a list of torch tensors. Got {type(track_ids_batch)}"
+            raise TypeError(msg)
+        if track_ids_batch[0].dtype != torch.long:
+            msg = f"Track IDs batch must have dtype torch.long. Got {track_ids_batch[0].dtype}"
+            raise ValueError(msg)
+        if track_ids_batch[0].ndim != 1:
+            msg = "Track IDs batch must be 1-dimensional"
+            raise ValueError(msg)
+        return track_ids_batch
 
     @staticmethod
     def _feature_vectors_validator(
