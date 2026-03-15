@@ -58,7 +58,7 @@ class BalancedSampler(Sampler):
         self.generator = generator
         self.repeat = n_repeats
 
-        super().__init__(dataset)
+        super().__init__()
 
         # img_indices: dict[label: list[idx]]
         ann_stats = get_idx_list_per_classes(dataset.dm_subset)
