@@ -39,6 +39,7 @@ DEFAULT_CONFIG_PER_TASK = {
     OTXTaskType.SEMANTIC_SEGMENTATION: RECIPE_PATH / "semantic_segmentation" / "litehrnet_18.yaml",
     OTXTaskType.INSTANCE_SEGMENTATION: RECIPE_PATH / "instance_segmentation" / "rfdetr_seg_small.yaml",
     OTXTaskType.KEYPOINT_DETECTION: RECIPE_PATH / "keypoint_detection" / "rtmpose_tiny.yaml",
+    OTXTaskType.TRACKING: RECIPE_PATH / "tracking" / "bytetrack_yolox_tiny.yaml",
 }
 
 

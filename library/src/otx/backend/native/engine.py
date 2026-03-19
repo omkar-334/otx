@@ -94,6 +94,7 @@ class OTXEngine(Engine):
         device: DeviceType = DeviceType.auto,
         num_devices: int = 1,
         task: OTXTaskType | None = None,
+        tracker: Any | None = None,
         **kwargs,
     ):
         """Initializes the OTX Engine.
@@ -108,6 +109,7 @@ class OTXEngine(Engine):
             num_devices (int, optional): The number of devices to use. If it is 2 or more, it will behave as multi-gpu.
             task (OTXTaskType | None, optional): The task type to use. Useful when you provide model name
                 and this model can be used for multiple tasks. Defaults to None.
+            tracker: Optional OTXTracker instance for multi-object tracking.
             **kwargs: Additional keyword arguments for pl.Trainer.
         """
         self._cache = TrainerArgumentsCache(**kwargs)
@@ -153,6 +155,7 @@ class OTXEngine(Engine):
             model = self._auto_configurator.get_model(**get_model_args)
 
         self._model: OTXModel = model
+        self._tracker = tracker
         self.task = self._model.task
         self.checkpoint = checkpoint
         if self.checkpoint:
@@ -486,6 +489,72 @@ class OTXEngine(Engine):
 
         return predict_result
 
+    @property
+    def tracker(self) -> Any:
+        """Return the tracker instance, if configured."""
+        return self._tracker
+
+    def track(
+        self,
+        video_path: str | PathLike,
+        output_dir: str | PathLike = "videos/tracked",
+        checkpoint: PathLike | None = None,
+        conf_thresh: float = 0.3,
+        class_names: list[str] | None = None,
+        verbose: bool = False,
+    ) -> Path:
+        """Run detection + tracking on a video.
+
+        Requires a tracker to be configured (via recipe YAML or constructor).
+
+        Args:
+            video_path: Path to input video.
+            output_dir: Directory for output video.
+            checkpoint: Optional checkpoint to load before tracking.
+            conf_thresh: Confidence threshold for visualization.
+            class_names: Optional class names for labels.
+            verbose: If True, log per-frame detection and tracking stats.
+
+        Returns:
+            Path to saved H.264 video.
+        """
+        if self._tracker is None:
+            msg = (
+                "No tracker configured. Either pass a tracker to OTXEngine() or "
+                "use a tracking recipe (e.g. bytetrack_yolox_tiny.yaml)."
+            )
+            raise RuntimeError(msg)
+
+        model = self.model
+        if checkpoint is not None:
+            ckpt = self._load_model_checkpoint(checkpoint, map_location="cpu")
+            model.load_state_dict(ckpt)
+
+        device = self._resolve_device()
+        model.eval()
+        model.to(device)
+
+        return self._tracker.track(
+            model,
+            video_path,
+            output_dir=output_dir,
+            device=device,
+            conf_thresh=conf_thresh,
+            class_names=class_names,
+            verbose=verbose,
+        )
+
+    def _resolve_device(self) -> str:
+        """Resolve the device string from engine config."""
+        accelerator = getattr(self.device, "accelerator", self.device)
+        if accelerator == DeviceType.auto or str(accelerator) == "auto":
+            if torch.cuda.is_available():
+                return "cuda"
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return "mps"
+            return "cpu"
+        return str(getattr(accelerator, "value", accelerator))
+
     def export(
         self,
         checkpoint: PathLike | None = None,
@@ -751,12 +820,17 @@ class OTXEngine(Engine):
         if not isinstance(model, OTXModel):
             raise TypeError(model)
 
+        # Parse tracker from YAML config if present
+        tracker = cls._instantiate_tracker_from_config(config_path)
+
+
         model.label_info = datamodule.label_info
 
         return cls(
             work_dir=instantiated_config.get("work_dir", work_dir),
             data=datamodule,
             model=model,
+            tracker=tracker,
             **engine_kwargs,
         )
 
@@ -821,6 +895,35 @@ class OTXEngine(Engine):
             work_dir=work_dir,
             **kwargs,
         )
+
+    @staticmethod
+    def _instantiate_tracker_from_config(config_path: PathLike) -> Any:
+        """Instantiate a tracker from the 'tracker:' section of a YAML config.
+
+        Args:
+            config_path: Path to the YAML config file.
+
+        Returns:
+            An OTXTracker instance, or None if no tracker section is present.
+        """
+        import importlib
+
+        import yaml
+
+        with open(config_path) as f:
+            raw_config = yaml.safe_load(f)
+
+        tracker_config = raw_config.get("tracker")
+        if tracker_config is None:
+            return None
+
+        class_path = tracker_config.get("class_path")
+        init_args = tracker_config.get("init_args", {})
+
+        module_path, class_name = class_path.rsplit(".", 1)
+        module = importlib.import_module(module_path)
+        tracker_cls = getattr(module, class_name)
+        return tracker_cls(**init_args)
 
     # ------------------------------------------------------------------------ #
     # Property and setter functions provided by Engine.
