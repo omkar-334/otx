@@ -43,6 +43,7 @@ DEFAULT_CONFIG_PER_TASK = {
     OTXTaskType.ANOMALY_SEGMENTATION: RECIPE_PATH / "anomaly_segmentation" / "padim.yaml",
     OTXTaskType.ANOMALY_DETECTION: RECIPE_PATH / "anomaly_detection" / "padim.yaml",
     OTXTaskType.KEYPOINT_DETECTION: RECIPE_PATH / "keypoint_detection" / "rtmpose_tiny.yaml",
+    OTXTaskType.TRACKING: RECIPE_PATH / "tracking" / "bytetrack_yolox_tiny.yaml",
 }
 
 

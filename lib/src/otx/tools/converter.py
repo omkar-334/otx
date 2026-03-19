@@ -249,6 +249,12 @@ TEMPLATE_ID_MAPPING = {
         "status": ModelStatus.SPEED,
         "default": True,
     },
+    # TRACKING
+    "Object_Tracking_ByteTrack_YOLOX_Tiny": {
+        "recipe_path": RECIPE_PATH / "tracking" / "bytetrack_yolox_tiny.yaml",
+        "status": ModelStatus.ACTIVE,
+        "default": True,
+    },
 }
 
 
