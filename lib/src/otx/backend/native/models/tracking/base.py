@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from otx.backend.native.models.detection.base import OTXDetectionModel
 
 # TODO:
-# - move tracker/ into this module
 # - Class-aware tracking: separate association per class to prevent cross-class ID switches
 # can add ReID feature extraction  and camera-motion compensation
 # it would be good to have motion tails and per-class coloring in addition to per-track-ID coloring
@@ -65,7 +64,7 @@ class OTXTracker(ABC):
 
     def reset(self) -> None:
         """Reset tracker state (call between videos)."""
-        from tracker.basetrack import BaseTrack
+        from .tracker.basetrack import BaseTrack
 
         BaseTrack._count = 0
         self._tracker_impl = None
