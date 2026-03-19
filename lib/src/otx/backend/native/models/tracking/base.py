@@ -210,11 +210,12 @@ class OTXTracker(ABC):
                 img_w=w_orig,
             )
 
+            cur_max = int(t_ids.max()) if len(t_ids) > 0 else 0
+            max_id = max(max_id, cur_max)
+
             if verbose:
                 n_dets = (scores > conf_thresh).sum()
-                cur_max = int(t_ids.max()) if len(t_ids) > 0 else 0
-                new_max = cur_max > max_id
-                max_id = max(max_id, cur_max)
+                new_max = cur_max > (max_id - 1)
                 id_str = f" NEW max_id={max_id}" if new_max else ""
                 print(
                     f"  Frame {frame_idx:>4d}: "
