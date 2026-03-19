@@ -824,7 +824,11 @@ class OTXEngine(Engine):
         tracker = cls._instantiate_tracker_from_config(config_path)
 
 
-        model.label_info = datamodule.label_info
+        # For tracking tasks, keep the model's pretrained label_info (e.g. COCO-80)
+        # instead of overriding with the dataset's classes. The tracker doesn't need
+        # class-specific training — it just needs good detections from pretrained weights.
+        if tracker is None:
+            model.label_info = datamodule.label_info
 
         return cls(
             work_dir=instantiated_config.get("work_dir", work_dir),

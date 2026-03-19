@@ -65,6 +65,9 @@ class OTXTracker(ABC):
 
     def reset(self) -> None:
         """Reset tracker state (call between videos)."""
+        from tracker.basetrack import BaseTrack
+
+        BaseTrack._count = 0
         self._tracker_impl = None
 
     @abstractmethod

@@ -487,6 +487,16 @@ def get_instantiated_classes(
         cli_args.extend(["--work_dir", str(work_dir)])
     if data_root is not None:
         cli_args.extend(["--data_root", str(data_root)])
+
+    # For tracking recipes, keep the model's pretrained label_info
+    # instead of overriding with the dataset's class count.
+    import yaml
+
+    with open(config) as f:
+        raw_config = yaml.safe_load(f)
+    if raw_config.get("task") == "TRACKING":
+        cli_args.append("--disable-infer-num-classes")
+
     for key, value in kwargs.items():
         cli_args.extend([f"--{key}", str(value)])
     otx_cli = OTXCLI(
