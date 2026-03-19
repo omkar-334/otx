@@ -20,8 +20,6 @@ Usage::
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -61,13 +59,7 @@ class ByteTrack(OTXTracker):
     # TODO: refactor this to implement logic ourselves
     def _create_tracker(self) -> Any:
         """Create a BYTETracker instance."""
-        try:
-            from tracker.byte_tracker import BYTETracker
-        except ImportError:
-            project_root = Path(__file__).resolve().parents[6]
-            if str(project_root) not in sys.path:
-                sys.path.insert(0, str(project_root))
-            from tracker.byte_tracker import BYTETracker
+        from .tracker.byte_tracker import BYTETracker
 
         class _Args:
             pass
