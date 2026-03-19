@@ -147,6 +147,7 @@ class OTXTracker(ABC):
         device: str | torch.device = "cpu",
         conf_thresh: float = 0.3,
         class_names: list[str] | None = None,
+        verbose: bool = False,
     ) -> Path:
         """Run detection + tracking on a video and save the result.
 
@@ -157,6 +158,7 @@ class OTXTracker(ABC):
             device: Device the model is on.
             conf_thresh: Confidence threshold for visualization.
             class_names: Optional class names for labels.
+            verbose: If True, log per-frame detection and tracking stats.
 
         Returns:
             Path to saved H.264 video.
@@ -183,6 +185,7 @@ class OTXTracker(ABC):
         self.reset()
 
         frame_idx = 0
+        max_id = 0
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
@@ -205,6 +208,20 @@ class OTXTracker(ABC):
                 img_w=w_orig,
             )
 
+            if verbose:
+                n_dets = (scores > conf_thresh).sum()
+                cur_max = int(t_ids.max()) if len(t_ids) > 0 else 0
+                new_max = cur_max > max_id
+                max_id = max(max_id, cur_max)
+                id_str = f" NEW max_id={max_id}" if new_max else ""
+                print(
+                    f"  Frame {frame_idx:>4d}: "
+                    f"{n_dets} dets (>{conf_thresh}), "
+                    f"{len(t_ids)} tracks, "
+                    f"IDs={t_ids.tolist()}"
+                    f"{id_str}"
+                )
+
             draw_detections(
                 frame,
                 t_bboxes,
@@ -217,7 +234,7 @@ class OTXTracker(ABC):
 
             writer.write(frame)
             frame_idx += 1
-            if frame_idx % 50 == 0:
+            if not verbose and frame_idx % 50 == 0:
                 print(f"  {frame_idx}/{total} frames")
 
         cap.release()
@@ -225,5 +242,5 @@ class OTXTracker(ABC):
 
         to_h264(raw_path, h264_path)
         raw_path.unlink()
-        print(f"Saved: {h264_path} ({frame_idx} frames)")
+        print(f"Saved: {h264_path} ({frame_idx} frames, max_id={max_id})")
         return h264_path
