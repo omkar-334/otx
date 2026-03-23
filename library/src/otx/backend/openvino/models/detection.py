@@ -30,6 +30,8 @@ class OVDetectionModel(OVModel):
 
     This class is designed to work with OpenVINO IR models or models from the Intel OMZ repository.
     It provides compatibility with the OTX testing pipeline for object detection tasks.
+    Also provides predict_step() for compatibility with OTXTracker and other consumers
+    that expect bboxes in original image coordinates.
 
         Initialize the OVDetectionModel.
 
@@ -104,6 +106,7 @@ class OVDetectionModel(OVModel):
             metric=metric,
         )
         self._task = OTXTaskType.DETECTION
+        self.data_input_params: Any | None = None
 
     def _setup_tiler(self) -> None:
         """Setup tiler for tile task."""
@@ -207,6 +210,81 @@ class OVDetectionModel(OVModel):
             bboxes=bboxes,
             labels=labels,
         )
+
+    def predict_step(
+        self,
+        batch: OTXDataBatch,
+        batch_idx: int = 0,
+    ) -> OTXPredBatch:
+        """Run inference and return predictions with bboxes in original image coordinates.
+
+        This method provides the same interface as OTXDetectionModel.predict_step(),
+        making OVDetectionModel compatible with OTXTracker and other consumers that
+        expect bboxes in original image coordinates.
+
+        The OV ModelAPI handles its own normalization internally, so this method
+        undoes the normalization applied by preprocess_frame() before passing to
+        the model, then rescales output bboxes from model input coords to original
+        image coords.
+
+        Args:
+            batch: Input data batch (images should be normalized by preprocess_frame).
+            batch_idx: Batch index (unused, for API compatibility).
+
+        Returns:
+            OTXPredBatch with bboxes scaled to original image coordinates.
+        """
+        # Undo normalization — ModelAPI handles its own preprocessing internally
+        images = batch.images
+        if isinstance(images, torch.Tensor):
+            images = images.cpu()
+        if self.data_input_params is not None:
+            mean = torch.tensor(self.data_input_params.mean).view(3, 1, 1)
+            std = torch.tensor(self.data_input_params.std).view(3, 1, 1)
+            raw_images = images * std + mean
+        else:
+            raw_images = images
+
+        raw_batch = OTXDataBatch(
+            batch_size=batch.batch_size,
+            images=raw_images,
+            imgs_info=batch.imgs_info,
+        )
+
+        preds = self.forward(raw_batch, async_inference=False)
+
+        # Rescale bboxes from model input coords to original image coords
+        imgs_info = batch.imgs_info or []
+        if preds.bboxes and imgs_info:
+            rescaled_bboxes = []
+            for bboxes, img_info in zip(preds.bboxes, imgs_info):
+                if img_info is None or not hasattr(img_info, "scale_factor") or img_info.scale_factor is None:
+                    rescaled_bboxes.append(bboxes)
+                    continue
+
+                scale_h, scale_w = img_info.scale_factor
+                scaled = bboxes.clone().float()
+                scaled[:, [0, 2]] /= scale_w  # x coords
+                scaled[:, [1, 3]] /= scale_h  # y coords
+                ori_h, ori_w = img_info.ori_shape
+                rescaled_bboxes.append(
+                    tv_tensors.BoundingBoxes(
+                        scaled,
+                        format="XYXY",
+                        canvas_size=(ori_h, ori_w),
+                    )
+                )
+
+            preds = OTXPredBatch(
+                batch_size=preds.batch_size,
+                images=preds.images,
+                imgs_info=preds.imgs_info,
+                bboxes=rescaled_bboxes,
+                scores=preds.scores,
+                labels=preds.labels,
+            )
+
+        return preds
 
     def prepare_metric_inputs(
         self,
