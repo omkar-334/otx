@@ -55,21 +55,18 @@ class ByteTrack(OTXTracker):
         )
         self.frame_rate = frame_rate
 
-    # for now i am relying on the original implementation for state management and core logic, so this is just a thin wrapper to adapt to our OTXDataBatch and numpy inputs/outputs
-    # TODO: refactor this to implement logic ourselves
-    def _create_tracker(self) -> Any:
+    def _create_tracker(self) -> Any:  # noqa: ANN401
         """Create a BYTETracker instance."""
+        from types import SimpleNamespace
+
         from .tracker.byte_tracker import BYTETracker
 
-        class _Args:
-            pass
-
-        args = _Args()
-        args.track_thresh = self.track_thresh
-        args.track_buffer = self.track_buffer
-        args.match_thresh = self.match_thresh
-        args.mot20 = False
-
+        args = SimpleNamespace(
+            track_thresh=self.track_thresh,
+            track_buffer=self.track_buffer,
+            match_thresh=self.match_thresh,
+            mot20=False,
+        )
         return BYTETracker(args, frame_rate=self.frame_rate)
 
     def update(

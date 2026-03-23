@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import cv2
-import numpy as np
 import torch
 from torchvision.tv_tensors import BoundingBoxes
 
@@ -18,13 +17,9 @@ from otx.backend.native.tools.video import draw_detections, preprocess_frame, to
 from otx.data.entity.torch import OTXPredBatch
 
 if TYPE_CHECKING:
-    from otx.backend.native.models.detection.base import OTXDetectionModel
+    import numpy as np
 
-# TODO:
-# - Class-aware tracking: separate association per class to prevent cross-class ID switches
-# can add ReID feature extraction  and camera-motion compensation
-# it would be good to have motion tails and per-class coloring in addition to per-track-ID coloring
-# add recipes- OTXEngine.from_model_name() support with recipe YAMLs for train+track workflow
+    from otx.backend.native.models.detection.base import OTXDetectionModel
 
 
 class OTXTracker(ABC):
@@ -52,11 +47,11 @@ class OTXTracker(ABC):
         self._tracker_impl: Any = None
 
     @abstractmethod
-    def _create_tracker(self) -> Any:
+    def _create_tracker(self) -> Any:  # noqa: ANN401
         """Create the underlying tracker implementation."""
 
     @property
-    def tracker(self) -> Any:
+    def tracker(self) -> Any:  # noqa: ANN401
         """Lazy-init tracker on first access."""
         if self._tracker_impl is None:
             self._tracker_impl = self._create_tracker()
@@ -66,7 +61,7 @@ class OTXTracker(ABC):
         """Reset tracker state (call between videos)."""
         from .tracker.basetrack import BaseTrack
 
-        BaseTrack._count = 0
+        BaseTrack._count = 0  # noqa: SLF001
         self._tracker_impl = None
 
     @abstractmethod
@@ -91,6 +86,20 @@ class OTXTracker(ABC):
             Tuple of (bboxes, scores, labels, track_ids) for active tracks.
         """
 
+    @staticmethod
+    def _sync_model_threshold(model: OTXDetectionModel, conf_thresh: float) -> None:
+        """Set model's internal confidence threshold to match the tracker's.
+
+        OTX models filter detections internally via best_confidence_threshold
+        (default 0.5) before returning predictions. If the tracker wants a lower
+        threshold, the model would silently discard detections the tracker needs.
+        This syncs the two so the model passes through everything above conf_thresh.
+        """
+        if hasattr(model, "hparams"):
+            current = model.hparams.get("best_confidence_threshold")
+            if current is None or current > conf_thresh:
+                model.hparams["best_confidence_threshold"] = conf_thresh
+
     def track_frame(
         self,
         model: OTXDetectionModel,
@@ -107,11 +116,15 @@ class OTXTracker(ABC):
         Returns:
             OTXPredBatch with bboxes, scores, labels, and track_ids.
         """
+        self._sync_model_threshold(model, self.track_thresh)
         batch = preprocess_frame(frame_bgr, model, device)
 
         with torch.no_grad():
             preds = model.predict_step(batch, batch_idx=0)
 
+        assert preds.bboxes is not None  # noqa: S101
+        assert preds.scores is not None  # noqa: S101
+        assert preds.labels is not None  # noqa: S101
         bboxes = preds.bboxes[0].cpu().numpy()
         scores = preds.scores[0].cpu().numpy()
         labels = preds.labels[0].cpu().numpy()
@@ -185,6 +198,7 @@ class OTXTracker(ABC):
         )
 
         self.reset()
+        self._sync_model_threshold(model, self.track_thresh)
 
         frame_idx = 0
         max_id = 0
@@ -198,6 +212,9 @@ class OTXTracker(ABC):
             with torch.no_grad():
                 preds = model.predict_step(batch, batch_idx=0)
 
+            assert preds.bboxes is not None  # noqa: S101
+            assert preds.scores is not None  # noqa: S101
+            assert preds.labels is not None  # noqa: S101
             bboxes = preds.bboxes[0].cpu().numpy()
             scores = preds.scores[0].cpu().numpy()
             labels = preds.labels[0].cpu().numpy()
