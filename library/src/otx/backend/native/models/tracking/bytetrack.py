@@ -27,7 +27,6 @@ import numpy as np
 from otx.backend.native.models.tracking.base import OTXTracker
 
 
-# TODO: do we name this ByteTrack or ByteTrackTracker?
 class ByteTrack(OTXTracker):
     """ByteTrack multi-object tracker.
 
@@ -69,11 +68,31 @@ class ByteTrack(OTXTracker):
         )
         return BYTETracker(args, frame_rate=self.frame_rate)
 
+    @staticmethod
+    def _compute_iou(bbox: np.ndarray, bboxes: np.ndarray) -> np.ndarray:
+        """Compute IoU between one bbox and an array of bboxes.
+
+        Args:
+            bbox: Single box [x1, y1, x2, y2].
+            bboxes: (N, 4) array of [x1, y1, x2, y2].
+
+        Returns:
+            (N,) array of IoU values.
+        """
+        x1 = np.maximum(bbox[0], bboxes[:, 0])
+        y1 = np.maximum(bbox[1], bboxes[:, 1])
+        x2 = np.minimum(bbox[2], bboxes[:, 2])
+        y2 = np.minimum(bbox[3], bboxes[:, 3])
+        inter = np.maximum(0, x2 - x1) * np.maximum(0, y2 - y1)
+        area_a = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+        area_b = (bboxes[:, 2] - bboxes[:, 0]) * (bboxes[:, 3] - bboxes[:, 1])
+        return inter / (area_a + area_b - inter + 1e-6)
+
     def update(
         self,
         bboxes: np.ndarray,
         scores: np.ndarray,
-        labels: np.ndarray,  # TODO: we shud pass labels and class names here -> match each tracked bbox back to the input detections by IoU to recover the labels for display
+        labels: np.ndarray,
         img_h: int,
         img_w: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -101,10 +120,17 @@ class ByteTrack(OTXTracker):
 
         for t in online_targets:
             x1, y1, w, h = t.tlwh
-            out_bboxes.append([x1, y1, x1 + w, y1 + h])
+            t_bbox = np.array([x1, y1, x1 + w, y1 + h])
+            out_bboxes.append(t_bbox)
             out_scores.append(t.score)
             out_ids.append(t.track_id)
-            out_labels.append(0)
+
+            # Recover class label by matching tracked bbox to input detections via IoU
+            if len(bboxes) > 0:
+                ious = self._compute_iou(t_bbox, bboxes)
+                out_labels.append(labels[ious.argmax()])
+            else:
+                out_labels.append(0)
 
         if len(out_bboxes) == 0:
             return (
