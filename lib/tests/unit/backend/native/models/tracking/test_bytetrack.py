@@ -155,6 +155,62 @@ class TestByteTrackReset:
         assert tracker.tracker is not old_internal
 
 
+class TestSyncModelThreshold:
+    """Test automatic model confidence threshold synchronization."""
+
+    def test_syncs_when_model_threshold_is_higher(self) -> None:
+        model = type("MockModel", (), {"hparams": {"best_confidence_threshold": 0.5}})()
+        OTXTracker._sync_model_threshold(model, 0.3)
+        assert model.hparams["best_confidence_threshold"] == 0.3
+
+    def test_keeps_lower_model_threshold(self) -> None:
+        model = type("MockModel", (), {"hparams": {"best_confidence_threshold": 0.1}})()
+        OTXTracker._sync_model_threshold(model, 0.3)
+        assert model.hparams["best_confidence_threshold"] == 0.1
+
+    def test_syncs_when_threshold_is_none(self) -> None:
+        model = type("MockModel", (), {"hparams": {"best_confidence_threshold": None}})()
+        OTXTracker._sync_model_threshold(model, 0.3)
+        assert model.hparams["best_confidence_threshold"] == 0.3
+
+    def test_no_crash_without_hparams(self) -> None:
+        model = type("MockModel", (), {})()
+        OTXTracker._sync_model_threshold(model, 0.3)  # should not raise
+
+
+class TestByteTrackLabelRecovery:
+    """Test that tracked objects recover correct class labels."""
+
+    @pytest.fixture()
+    def tracker(self) -> ByteTrack:
+        t = ByteTrack(track_thresh=0.3)
+        t.reset()
+        return t
+
+    def test_labels_recovered_from_detections(self, tracker: ByteTrack) -> None:
+        bboxes = np.array([
+            [10, 10, 50, 50],
+            [200, 200, 300, 300],
+        ])
+        scores = np.array([0.9, 0.8])
+        labels = np.array([5, 12])  # car=5, dog=12
+
+        _, _, out_labels, _ = tracker.update(bboxes, scores, labels, 480, 640)
+
+        # Labels should be recovered from input detections, not all zeros
+        assert not np.all(out_labels == 0) or len(out_labels) == 0
+        for lbl in out_labels:
+            assert lbl in [5, 12], f"Label {lbl} not in input labels"
+
+    def test_empty_detections_returns_empty_labels(self, tracker: ByteTrack) -> None:
+        bboxes = np.empty((0, 4))
+        scores = np.empty(0)
+        labels = np.empty(0, dtype=np.int64)
+
+        _, _, out_labels, _ = tracker.update(bboxes, scores, labels, 480, 640)
+        assert len(out_labels) == 0
+
+
 class TestByteTrackTrackFrame:
     """Test track_frame returns OTXPredBatch with correct fields."""
 
@@ -175,6 +231,7 @@ class TestByteTrackTrackFrame:
         model.data_input_params.input_size = (416, 416)
         model.data_input_params.mean = (0.0, 0.0, 0.0)
         model.data_input_params.std = (1.0, 1.0, 1.0)
+        model.hparams = {"best_confidence_threshold": 0.5}
 
         # Mock predictions
         mock_preds = OTXPredBatch(
