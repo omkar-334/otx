@@ -31,6 +31,10 @@ tracker:
     track_buffer: 30
     match_thresh: 0.8
     frame_rate: 30
+    low_thresh: 0.1
+    new_track_thresh: 0.6
+    second_match_thresh: 0.5
+    unconfirmed_match_thresh: 0.7
 
 engine:
   device: auto
