@@ -34,10 +34,18 @@ class ByteTrack(OTXTracker):
     with Kalman filter prediction for robust multi-object tracking.
 
     Args:
-        track_thresh: Confidence threshold for primary association.
-        track_buffer: Frames to keep lost tracks alive.
-        match_thresh: IoU threshold for association.
-        frame_rate: Video frame rate (used for track buffer calculation).
+        track_thresh: Confidence threshold for primary (high-confidence) association.
+        track_buffer: Frames to keep lost tracks alive before removal.
+        match_thresh: IoU threshold for matching detections to existing tracks.
+        frame_rate: Video frame rate (used for track buffer scaling).
+        low_thresh: Minimum confidence for second-stage (low-confidence) association.
+            Detections between low_thresh and track_thresh are used in the second
+            matching stage to recover occluded tracks.
+        new_track_thresh: Minimum confidence to initialize a new track.
+            Defaults to track_thresh + 0.1 to avoid creating tracks from noise.
+        second_match_thresh: IoU threshold for second-stage association.
+        unconfirmed_match_thresh: IoU threshold for matching unconfirmed
+            (single-frame) tracks.
     """
 
     def __init__(
@@ -46,6 +54,10 @@ class ByteTrack(OTXTracker):
         track_buffer: int = 30,
         match_thresh: float = 0.8,
         frame_rate: int = 30,
+        low_thresh: float = 0.1,
+        new_track_thresh: float | None = None,
+        second_match_thresh: float = 0.5,
+        unconfirmed_match_thresh: float = 0.7,
     ) -> None:
         super().__init__(
             track_thresh=track_thresh,
@@ -53,6 +65,10 @@ class ByteTrack(OTXTracker):
             match_thresh=match_thresh,
         )
         self.frame_rate = frame_rate
+        self.low_thresh = low_thresh
+        self.new_track_thresh = new_track_thresh if new_track_thresh is not None else track_thresh + 0.1
+        self.second_match_thresh = second_match_thresh
+        self.unconfirmed_match_thresh = unconfirmed_match_thresh
 
     def _create_tracker(self) -> Any:  # noqa: ANN401
         """Create a BYTETracker instance."""
@@ -65,6 +81,10 @@ class ByteTrack(OTXTracker):
             track_buffer=self.track_buffer,
             match_thresh=self.match_thresh,
             mot20=False,
+            low_thresh=self.low_thresh,
+            new_track_thresh=self.new_track_thresh,
+            second_match_thresh=self.second_match_thresh,
+            unconfirmed_match_thresh=self.unconfirmed_match_thresh,
         )
         return BYTETracker(args, frame_rate=self.frame_rate)
 
