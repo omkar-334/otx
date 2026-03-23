@@ -27,12 +27,19 @@ class OTXTracker(ABC):
 
     A tracker is detector-agnostic. It takes per-frame detections from any
     OTXDetectionModel and associates them across frames to produce consistent
-    track IDs.
+    track IDs. The model's internal confidence threshold is automatically
+    synced to track_thresh so detections aren't silently filtered.
 
     Args:
-        track_thresh: Confidence threshold for primary association.
-        track_buffer: Number of frames to keep lost tracks alive.
-        match_thresh: IoU threshold for matching detections to tracks.
+        track_thresh: Minimum confidence for a detection to be considered in
+            the primary (first-stage) association. Also auto-syncs the model's
+            internal best_confidence_threshold to this value.
+        track_buffer: Number of frames to keep lost tracks alive before
+            removing them. A lost track can be re-identified if the object
+            reappears within this window.
+        match_thresh: IoU threshold for the primary association stage.
+            Higher values require tighter spatial overlap between predictions
+            and existing tracks.
     """
 
     def __init__(
@@ -171,9 +178,12 @@ class OTXTracker(ABC):
             video_path: Path to input video.
             output_dir: Directory for output video.
             device: Device the model is on.
-            conf_thresh: Confidence threshold for visualization.
-            class_names: Optional class names for labels.
-            verbose: If True, log per-frame detection and tracking stats.
+            conf_thresh: Confidence threshold for visualization only — controls
+                which tracked boxes are drawn on the output video. Does NOT affect
+                tracking logic (that's controlled by track_thresh).
+            class_names: List of class names (e.g. COCO 80 classes) for labeling
+                boxes on the video and in verbose logs. If None, only IDs are shown.
+            verbose: If True, log per-frame detection counts, track IDs, and labels.
 
         Returns:
             Path to saved H.264 video.
