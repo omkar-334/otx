@@ -147,22 +147,29 @@ def to_h264(src: str | Path, dst: str | Path) -> Path:
     """
     dst = Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(src),
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            "-an",
-            str(dst),
-        ],
-        capture_output=True,
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(src),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                "-an",
+                str(dst),
+            ],
+            capture_output=True,
+            check=True,
+        )
+    except FileNotFoundError:
+        msg = "ffmpeg not found. Install it with: apt-get install ffmpeg (Linux) or brew install ffmpeg (macOS)"
+        raise RuntimeError(msg) from None
+    except subprocess.CalledProcessError as e:
+        msg = f"ffmpeg failed to encode {src}: {e.stderr.decode()}"
+        raise RuntimeError(msg) from e
     return dst
