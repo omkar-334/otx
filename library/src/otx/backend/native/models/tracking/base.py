@@ -234,11 +234,20 @@ class OTXTracker(ABC):
                 n_dets = (scores > conf_thresh).sum()
                 new_max = cur_max > (max_id - 1)
                 id_str = f" NEW max_id={max_id}" if new_max else ""
+                # Build ID:label pairs for readable logging
+                if class_names is not None and len(t_ids) > 0:
+                    id_labels = [
+                        f"{tid}:{class_names[lbl] if lbl < len(class_names) else lbl}"
+                        for tid, lbl in zip(t_ids.tolist(), t_labels.tolist())
+                    ]
+                    tracks_str = f"[{', '.join(id_labels)}]"
+                else:
+                    tracks_str = str(t_ids.tolist())
                 print(
                     f"  Frame {frame_idx:>4d}: "
                     f"{n_dets} dets (>{conf_thresh}), "
                     f"{len(t_ids)} tracks, "
-                    f"IDs={t_ids.tolist()}"
+                    f"IDs={tracks_str}"
                     f"{id_str}"
                 )
 
