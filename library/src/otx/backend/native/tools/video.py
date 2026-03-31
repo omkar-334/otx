@@ -72,6 +72,10 @@ def preprocess_frame(
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     resized = cv2.resize(rgb, (inp_w, inp_h))
     tensor = torch.from_numpy(resized).permute(2, 0, 1).float()
+    # If mean values are < 1, the model expects 0-1 normalized pixels (e.g. RFDETR).
+    # Otherwise it expects 0-255 pixels (e.g. YOLOX).
+    if all(m < 1.0 for m in mean):
+        tensor = tensor / 255.0
     tensor = (tensor - torch.tensor(mean).view(3, 1, 1)) / torch.tensor(std).view(3, 1, 1)
 
     img_info = ImageInfo(
