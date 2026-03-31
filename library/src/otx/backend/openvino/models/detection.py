@@ -96,6 +96,10 @@ class OVDetectionModel(OVModel):
         metric: MetricCallable = MeanAveragePrecisionFMeasureCallable,
         **kwargs,
     ) -> None:
+        # Disable ModelAPI's confidence filtering so all detections reach the metric
+        if model_api_configuration is None:
+            model_api_configuration = {}
+        model_api_configuration.setdefault("confidence_threshold", 0.0)
         super().__init__(
             model_path=model_path,
             model_type=model_type,
@@ -176,11 +180,19 @@ class OVDetectionModel(OVModel):
             log.warning(f"label_shift: {label_shift}")
 
         for i, output in enumerate(outputs):
+            pred_boxes = torch.tensor(output.bboxes, dtype=torch.float32)
+            img_h, img_w = inputs.imgs_info[i].img_shape  # type: ignore[union-attr, index]
+            ori_h, ori_w = inputs.imgs_info[i].ori_shape  # type: ignore[union-attr, index]
+            if (img_h, img_w) != (ori_h, ori_w) and len(pred_boxes) > 0:
+                scale_h = ori_h / img_h
+                scale_w = ori_w / img_w
+                pred_boxes[:, 0::2] *= scale_w  # x coords
+                pred_boxes[:, 1::2] *= scale_h  # y coords
             bboxes.append(
                 tv_tensors.BoundingBoxes(
-                    data=output.bboxes,
+                    data=pred_boxes,
                     format="XYXY",
-                    canvas_size=inputs.imgs_info[i].img_shape,  # type: ignore[union-attr, index]
+                    canvas_size=(ori_h, ori_w),
                     dtype=torch.float32,
                 ),
             )
@@ -222,17 +234,17 @@ class OVDetectionModel(OVModel):
         making OVDetectionModel compatible with OTXTracker and other consumers that
         expect bboxes in original image coordinates.
 
-        The OV ModelAPI handles its own normalization internally, so this method
-        undoes the normalization applied by preprocess_frame() before passing to
-        the model, then rescales output bboxes from model input coords to original
-        image coords.
+        The OV ModelAPI handles its own normalization and box rescaling internally,
+        so this method undoes the normalization applied by preprocess_frame() before
+        passing to the model. Box coordinates are already in ori_shape space after
+        forward().
 
         Args:
             batch: Input data batch (images should be normalized by preprocess_frame).
             batch_idx: Batch index (unused, for API compatibility).
 
         Returns:
-            OTXPredictionBatch with bboxes scaled to original image coordinates.
+            OTXPredictionBatch with bboxes in original image coordinates.
         """
         # Undo normalization — ModelAPI handles its own preprocessing internally
         images = batch.images
@@ -250,39 +262,7 @@ class OVDetectionModel(OVModel):
             imgs_info=batch.imgs_info,
         )
 
-        preds = self.forward(raw_batch, async_inference=False)
-
-        # Rescale bboxes from model input coords to original image coords
-        imgs_info = batch.imgs_info or []
-        if preds.bboxes and imgs_info:
-            rescaled_bboxes = []
-            for bboxes, img_info in zip(preds.bboxes, imgs_info):
-                if img_info is None or not hasattr(img_info, "scale_factor") or img_info.scale_factor is None:
-                    rescaled_bboxes.append(bboxes)
-                    continue
-
-                scale_h, scale_w = img_info.scale_factor
-                scaled = bboxes.clone().float()
-                scaled[:, [0, 2]] /= scale_w  # x coords
-                scaled[:, [1, 3]] /= scale_h  # y coords
-                ori_h, ori_w = img_info.ori_shape
-                rescaled_bboxes.append(
-                    tv_tensors.BoundingBoxes(
-                        scaled,
-                        format="XYXY",
-                        canvas_size=(ori_h, ori_w),
-                    )
-                )
-
-            preds = OTXPredictionBatch(
-                images=preds.images,
-                imgs_info=preds.imgs_info,
-                bboxes=rescaled_bboxes,
-                scores=preds.scores,
-                labels=preds.labels,
-            )
-
-        return preds
+        return self.forward(raw_batch, async_inference=False)
 
     def prepare_metric_inputs(
         self,
