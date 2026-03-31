@@ -213,9 +213,9 @@ class OVDetectionModel(OVModel):
 
     def predict_step(
         self,
-        batch: OTXDataBatch,
+        batch: OTXSampleBatch,
         batch_idx: int = 0,
-    ) -> OTXPredBatch:
+    ) -> OTXPredictionBatch:
         """Run inference and return predictions with bboxes in original image coordinates.
 
         This method provides the same interface as OTXDetectionModel.predict_step(),
@@ -232,7 +232,7 @@ class OVDetectionModel(OVModel):
             batch_idx: Batch index (unused, for API compatibility).
 
         Returns:
-            OTXPredBatch with bboxes scaled to original image coordinates.
+            OTXPredictionBatch with bboxes scaled to original image coordinates.
         """
         # Undo normalization — ModelAPI handles its own preprocessing internally
         images = batch.images
@@ -245,8 +245,7 @@ class OVDetectionModel(OVModel):
         else:
             raw_images = images
 
-        raw_batch = OTXDataBatch(
-            batch_size=batch.batch_size,
+        raw_batch = OTXSampleBatch(
             images=raw_images,
             imgs_info=batch.imgs_info,
         )
@@ -275,8 +274,7 @@ class OVDetectionModel(OVModel):
                     )
                 )
 
-            preds = OTXPredBatch(
-                batch_size=preds.batch_size,
+            preds = OTXPredictionBatch(
                 images=preds.images,
                 imgs_info=preds.imgs_info,
                 bboxes=rescaled_bboxes,
