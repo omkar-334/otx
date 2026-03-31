@@ -11,6 +11,7 @@ import torch
 from model_api.tilers import DetectionTiler
 from torchvision import tv_tensors
 
+from otx.backend.native.models.detection.detectors.rfdetr import _build_coco91_remap_tensor
 from otx.backend.openvino.models.base import OVModel
 from otx.data.entity.sample import OTXPredictionBatch, OTXSampleBatch
 from otx.metrics import MetricCallable, MetricInput
@@ -111,6 +112,8 @@ class OVDetectionModel(OVModel):
         )
         self._task = OTXTaskType.DETECTION
         self.data_input_params: Any | None = None
+        # COCO-91 → contiguous label remap (matches RFDETRDetector.postprocess)
+        self._coco91_remap = _build_coco91_remap_tensor(91)
 
     def _setup_tiler(self) -> None:
         """Setup tiler for tile task."""
@@ -197,7 +200,11 @@ class OVDetectionModel(OVModel):
                 ),
             )
             scores.append(torch.tensor(output.scores.reshape(-1)))
-            labels.append(torch.tensor(output.labels.reshape(-1) - label_shift, dtype=torch.long))
+            raw_labels = torch.tensor(output.labels.reshape(-1) - label_shift, dtype=torch.long)
+            # Remap COCO-91 IDs to contiguous 0-indexed labels
+            valid = (raw_labels >= 0) & (raw_labels < len(self._coco91_remap))
+            remapped = torch.where(valid, self._coco91_remap[raw_labels.clamp(0)], raw_labels)
+            labels.append(remapped)
 
         if outputs and outputs[0].saliency_map.size > 1:
             # Squeeze dim 4D => 3D, (1, num_classes, H, W) => (num_classes, H, W)
