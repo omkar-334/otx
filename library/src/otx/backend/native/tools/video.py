@@ -162,6 +162,8 @@ def to_h264(src: str | Path, dst: str | Path) -> Path:
                 "libx264",
                 "-pix_fmt",
                 "yuv420p",
+                "-g",
+                "30",
                 "-movflags",
                 "+faststart",
                 "-an",
