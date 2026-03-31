@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cv2
-import numpy as np
 import torch
 
+from otx.data.entity import OTXSampleBatch
 from otx.data.entity.base import ImageInfo
-from otx.data.entity.torch import OTXDataBatch
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from otx.backend.native.models.base import OTXModel
 
 # i added 20 distinct colors for visualization
@@ -48,8 +49,8 @@ def preprocess_frame(
     frame_bgr: np.ndarray,
     model: OTXModel,
     device: str | torch.device = "cpu",
-) -> OTXDataBatch:
-    """Preprocess a BGR frame into an OTXDataBatch ready for model inference.
+) -> OTXSampleBatch:
+    """Preprocess a BGR frame into an OTXSampleBatch ready for model inference.
 
     Handles resizing, normalization, and proper scale_factor so bboxes
     are returned in original image coordinates.
@@ -60,7 +61,7 @@ def preprocess_frame(
         device: Target device.
 
     Returns:
-        OTXDataBatch with a single image.
+        OTXSampleBatch with a single image.
     """
     inp_h, inp_w = model.data_input_params.input_size
     mean = model.data_input_params.mean
@@ -79,8 +80,7 @@ def preprocess_frame(
         ori_shape=(ori_h, ori_w),
         scale_factor=(inp_h / ori_h, inp_w / ori_w),
     )
-    return OTXDataBatch(
-        batch_size=1,
+    return OTXSampleBatch(
         images=tensor.unsqueeze(0).to(device),
         imgs_info=[img_info],
     )
@@ -148,8 +148,8 @@ def to_h264(src: str | Path, dst: str | Path) -> Path:
     dst = Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(
-            [
+        subprocess.run(  # noqa: S603
+            [  # noqa: S607
                 "ffmpeg",
                 "-y",
                 "-i",

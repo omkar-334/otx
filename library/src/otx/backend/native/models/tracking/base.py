@@ -146,7 +146,6 @@ class OTXTracker(ABC):
         )
 
         return OTXPredictionBatch(
-            batch_size=1,
             images=preds.images,
             imgs_info=preds.imgs_info,
             bboxes=[
