@@ -25,6 +25,107 @@ if TYPE_CHECKING:
     from jsonargparse import Namespace
 
 
+# COCO's original 91-category IDs that map to the 80 actual classes.
+# Used to remap labels from the truncated 91-class head to contiguous 0-79 indices.
+_COCO91_TO_CONTIGUOUS = {
+    1: 0,
+    2: 1,
+    3: 2,
+    4: 3,
+    5: 4,
+    6: 5,
+    7: 6,
+    8: 7,
+    9: 8,
+    10: 9,
+    11: 10,
+    13: 11,
+    14: 12,
+    15: 13,
+    16: 14,
+    17: 15,
+    18: 16,
+    19: 17,
+    20: 18,
+    21: 19,
+    22: 20,
+    23: 21,
+    24: 22,
+    25: 23,
+    27: 24,
+    28: 25,
+    31: 26,
+    32: 27,
+    33: 28,
+    34: 29,
+    35: 30,
+    36: 31,
+    37: 32,
+    38: 33,
+    39: 34,
+    40: 35,
+    41: 36,
+    42: 37,
+    43: 38,
+    44: 39,
+    46: 40,
+    47: 41,
+    48: 42,
+    49: 43,
+    50: 44,
+    51: 45,
+    52: 46,
+    53: 47,
+    54: 48,
+    55: 49,
+    56: 50,
+    57: 51,
+    58: 52,
+    59: 53,
+    60: 54,
+    61: 55,
+    62: 56,
+    63: 57,
+    64: 58,
+    65: 59,
+    67: 60,
+    70: 61,
+    72: 62,
+    73: 63,
+    74: 64,
+    75: 65,
+    76: 66,
+    77: 67,
+    78: 68,
+    79: 69,
+    80: 70,
+    81: 71,
+    82: 72,
+    84: 73,
+    85: 74,
+    86: 75,
+    87: 76,
+    88: 77,
+    89: 78,
+    90: 79,
+}
+
+
+def _build_coco91_remap_tensor(num_classes: int) -> Tensor:
+    """Build a lookup tensor that maps COCO-91 label indices to contiguous 0-indexed labels.
+
+    When ``reinitialize_detection_head(80)`` truncates the 91-class head to 80 rows,
+    the output label indices correspond to COCO's original category IDs (0-79 from the
+    91-class space).  This tensor maps those back to contiguous 0-79 indices matching the
+    standard 80-class COCO ordering (person=0, bicycle=1, ..., toothbrush=79).
+    """
+    remap = torch.full((num_classes,), -1, dtype=torch.long)
+    for coco_id, contiguous_id in _COCO91_TO_CONTIGUOUS.items():
+        if coco_id < num_classes:
+            remap[coco_id] = contiguous_id
+    return remap
+
+
 class RFDETRDetector(BaseModule):
     """Wrapper around RF-DETR's LWDETR model for OTX integration.
 
@@ -63,6 +164,12 @@ class RFDETRDetector(BaseModule):
             if multi_scale
             else []
         )
+
+        # Build label remap for COCO-91 → contiguous conversion.
+        # Only applies when using pretrained COCO weights with truncated head.
+        num_classes = rfdetr_args.num_classes
+        remap = _build_coco91_remap_tensor(num_classes)
+        self.register_buffer("_coco91_remap", remap)
 
     def forward(
         self,
@@ -138,7 +245,24 @@ class RFDETRDetector(BaseModule):
                     canvas_size=orig_size,
                 ),
             )
-            labels_list.append(result["labels"].long())
+            raw_labels = result["labels"].long()
+            remap = self._coco91_remap.to(raw_labels.device)
+            remapped = remap[raw_labels]
+            # Keep only detections with valid COCO class mappings (drop background/gap labels)
+            valid = remapped >= 0
+            if not valid.all():
+                result["scores"] = result["scores"][valid]
+                result["boxes"] = result["boxes"][valid]
+                raw_labels = raw_labels[valid]
+                remapped = remapped[valid]
+                # Update scores and boxes lists
+                scores_list[-1] = result["scores"]
+                boxes_list[-1] = BoundingBoxes(
+                    result["boxes"],
+                    format="xyxy",
+                    canvas_size=orig_size,
+                )
+            labels_list.append(remapped)
             if "masks" in result:
                 masks_list.append(torch.tensor(result["masks"].squeeze(1), dtype=torch.uint8))
 
