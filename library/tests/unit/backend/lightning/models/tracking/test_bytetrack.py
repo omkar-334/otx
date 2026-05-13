@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 import torch
 
-from otx.backend.native.models.tracking.base import OTXTracker
-from otx.backend.native.models.tracking.bytetrack import ByteTrack
+from getitune.backend.lightning.models.tracking.base import OTXTracker
+from getitune.backend.lightning.models.tracking.bytetrack import ByteTrack
 
 
 class TestByteTrackInit:
@@ -212,30 +212,27 @@ class TestByteTrackLabelRecovery:
 
 
 class TestByteTrackTrackFrame:
-    """Test track_frame returns OTXPredBatch with correct fields."""
+    """Test track_frame returns PredictionBatch with correct fields."""
 
-    def test_returns_otx_pred_batch(self) -> None:
-        """Verify track_frame returns OTXPredBatch with track_ids."""
+    def test_returns_prediction_batch(self) -> None:
+        """Verify track_frame returns PredictionBatch with track_ids."""
         from unittest.mock import MagicMock
 
         from torchvision.tv_tensors import BoundingBoxes
 
-        from otx.data.entity.base import ImageInfo
-        from otx.data.entity.torch import OTXDataBatch, OTXPredBatch
+        from getitune.data.entity.base import ImageInfo
+        from getitune.data.entity.sample import PredictionBatch
 
         tracker = ByteTrack(track_thresh=0.3)
         tracker.reset()
 
-        # Mock model
         model = MagicMock()
         model.data_input_params.input_size = (416, 416)
         model.data_input_params.mean = (0.0, 0.0, 0.0)
         model.data_input_params.std = (1.0, 1.0, 1.0)
         model.hparams = {"best_confidence_threshold": 0.5}
 
-        # Mock predictions
-        mock_preds = OTXPredBatch(
-            batch_size=1,
+        mock_preds = PredictionBatch(
             images=torch.randn(1, 3, 416, 416),
             imgs_info=[ImageInfo(
                 img_idx=0,
@@ -253,11 +250,10 @@ class TestByteTrackTrackFrame:
         )
         model.predict_step.return_value = mock_preds
 
-        # Create a fake frame
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         result = tracker.track_frame(model, frame, device="cpu")
 
-        assert isinstance(result, OTXPredBatch)
+        assert isinstance(result, PredictionBatch)
         assert result.track_ids is not None
         assert len(result.track_ids) == 1
         assert result.track_ids[0].dtype == torch.long

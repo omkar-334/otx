@@ -13,20 +13,20 @@ import cv2
 import torch
 from torchvision.tv_tensors import BoundingBoxes
 
-from otx.backend.native.tools.video import draw_detections, preprocess_frame, to_h264
-from otx.data.entity import OTXPredictionBatch
+from getitune.backend.lightning.tools.video import draw_detections, preprocess_frame, to_h264
+from getitune.data.entity import PredictionBatch
 
 if TYPE_CHECKING:
     import numpy as np
 
-    from otx.backend.native.models.detection.base import OTXDetectionModel
+    from getitune.backend.lightning.models.detection.base import LightningDetectionModel
 
 
 class OTXTracker(ABC):
     """Base class for multi-object trackers.
 
     A tracker is detector-agnostic. It takes per-frame detections from any
-    OTXDetectionModel and associates them across frames to produce consistent
+    LightningDetectionModel and associates them across frames to produce consistent
     track IDs. The model's internal confidence threshold is automatically
     synced to track_thresh so detections aren't silently filtered.
 
@@ -94,7 +94,7 @@ class OTXTracker(ABC):
         """
 
     @staticmethod
-    def _sync_model_threshold(model: OTXDetectionModel, conf_thresh: float) -> None:
+    def _sync_model_threshold(model: LightningDetectionModel, conf_thresh: float) -> None:
         """Set model's internal confidence threshold to match the tracker's.
 
         OTX models filter detections internally via best_confidence_threshold
@@ -109,10 +109,10 @@ class OTXTracker(ABC):
 
     def track_frame(
         self,
-        model: OTXDetectionModel,
+        model: LightningDetectionModel,
         frame_bgr: np.ndarray,
         device: str | torch.device = "cpu",
-    ) -> OTXPredictionBatch:
+    ) -> PredictionBatch:
         """Run detection + tracking on a single BGR frame.
 
         Args:
@@ -121,7 +121,7 @@ class OTXTracker(ABC):
             device: Device the model is on.
 
         Returns:
-            OTXPredictionBatch with bboxes, scores, labels, and track_ids.
+            PredictionBatch with bboxes, scores, labels, and track_ids.
         """
         self._sync_model_threshold(model, self.track_thresh)
         batch = preprocess_frame(frame_bgr, model, device)
@@ -145,7 +145,7 @@ class OTXTracker(ABC):
             img_w=ori_w,
         )
 
-        return OTXPredictionBatch(
+        return PredictionBatch(
             images=preds.images,
             imgs_info=preds.imgs_info,
             bboxes=[
@@ -162,7 +162,7 @@ class OTXTracker(ABC):
 
     def track(
         self,
-        model: OTXDetectionModel,
+        model: LightningDetectionModel,
         video_path: str | Path,
         output_dir: str | Path = "videos/tracked",
         device: str | torch.device = "cpu",

@@ -8,8 +8,8 @@ The detector is passed to ``track()`` or ``track_frame()`` at call time.
 
 Usage::
 
-    from otx.backend.native.models.detection.yolox import YOLOX
-    from otx.backend.native.models.tracking.bytetrack import ByteTrack
+    from getitune.backend.lightning.models.detection.yolox import YOLOX
+    from getitune.backend.lightning.models.tracking.bytetrack import ByteTrack
 
     model = YOLOX(label_info=80, ...)
     model.eval().to(device)
@@ -24,7 +24,7 @@ from typing import Any
 
 import numpy as np
 
-from otx.backend.native.models.tracking.base import OTXTracker
+from .base import OTXTracker
 
 
 class ByteTrack(OTXTracker):

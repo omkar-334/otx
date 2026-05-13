@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING
 import cv2
 import torch
 
-from otx.data.entity import OTXSampleBatch
-from otx.data.entity.base import ImageInfo
+from getitune.data.entity import SampleBatch
+from getitune.data.entity.base import ImageInfo
 
 if TYPE_CHECKING:
     import numpy as np
 
-    from otx.backend.native.models.base import OTXModel
+    from getitune.backend.lightning.models.base import LightningModel
 
 # i added 20 distinct colors for visualization
 TRACK_COLORS = [
@@ -47,10 +47,10 @@ TRACK_COLORS = [
 
 def preprocess_frame(
     frame_bgr: np.ndarray,
-    model: OTXModel,
+    model: LightningModel,
     device: str | torch.device = "cpu",
-) -> OTXSampleBatch:
-    """Preprocess a BGR frame into an OTXSampleBatch ready for model inference.
+) -> SampleBatch:
+    """Preprocess a BGR frame into an SampleBatch ready for model inference.
 
     Handles resizing, normalization, and proper scale_factor so bboxes
     are returned in original image coordinates.
@@ -61,7 +61,7 @@ def preprocess_frame(
         device: Target device.
 
     Returns:
-        OTXSampleBatch with a single image.
+        SampleBatch with a single image.
     """
     inp_h, inp_w = model.data_input_params.input_size
     mean = model.data_input_params.mean
@@ -84,7 +84,7 @@ def preprocess_frame(
         ori_shape=(ori_h, ori_w),
         scale_factor=(inp_h / ori_h, inp_w / ori_w),
     )
-    return OTXSampleBatch(
+    return SampleBatch(
         images=tensor.unsqueeze(0).to(device),
         imgs_info=[img_info],
     )
