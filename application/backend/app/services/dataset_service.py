@@ -97,9 +97,9 @@ class DatasetService(BaseSessionManagedService):
 
         if annotations is not None:
             labels = self._label_service.list_all(project_id=project_id)
-            DatasetService._validate_annotations_labels(annotations=annotations, labels=labels)
-            DatasetService._validate_annotations(annotations=annotations, task=task)
-            DatasetService._validate_annotations_coordinates(annotations=annotations, media=media)
+            annotations = DatasetService._cleanup_and_validate_annotations(
+                annotations=annotations, task=task, labels=labels, media=media, user_reviewed=user_reviewed
+            )
 
             dataset_item.annotation_data = [annotation.model_dump(mode="json") for annotation in annotations]
 
@@ -117,7 +117,7 @@ class DatasetService(BaseSessionManagedService):
         project: Project,
         start_date: datetime | None = None,
         end_date: datetime | None = None,
-        annotation_status: str | None = None,
+        annotation_status: DatasetItemAnnotationStatus | None = None,
         label_ids: list[UUID] | None = None,
         subset: str | None = None,
     ) -> int:
@@ -165,30 +165,24 @@ class DatasetService(BaseSessionManagedService):
         self,
         project_id: UUID,
         filters: DatasetItemFilters | None = None,
-        keep_predictions: bool = True,
     ) -> list[tuple[DatasetItem, Media]]:
         """Get information about available dataset items with corresponding media info"""
         if filters is None:
             filters = DatasetItemFilters()
         repo = DatasetItemRepository(project_id=str(project_id), db=self.db_session)
         label_ids_str = [str(label_id) for label_id in filters.label_ids] if filters.label_ids else None
-        items_with_media = []
-        for db_dataset_item, db_media in repo.list_items_with_media(
-            limit=filters.limit,
-            offset=filters.offset,
-            start_date=filters.start_date,
-            end_date=filters.end_date,
-            annotation_status=filters.annotation_status,
-            label_ids=label_ids_str,
-            subset=filters.subset,
-        ):
-            dataset_item = DatasetItem.model_validate(db_dataset_item)
-            media = MediaAdapter.validate_python(db_media)
-            # remove predictions if not requested
-            if not keep_predictions and dataset_item.annotation_data and not dataset_item.user_reviewed:
-                dataset_item.annotation_data = []
-            items_with_media.append((dataset_item, media))
-        return items_with_media
+        return [
+            (DatasetItem.model_validate(db_dataset_item), MediaAdapter.validate_python(db_media))
+            for db_dataset_item, db_media in repo.list_items_with_media(
+                limit=filters.limit,
+                offset=filters.offset,
+                start_date=filters.start_date,
+                end_date=filters.end_date,
+                annotation_status=filters.annotation_status,
+                label_ids=label_ids_str,
+                subset=filters.subset,
+            )
+        ]
 
     def get_dataset_item_by_id(self, project_id: UUID, dataset_item_id: UUID) -> DatasetItem:
         """Get a dataset item by its ID"""
@@ -199,6 +193,25 @@ class DatasetService(BaseSessionManagedService):
         return DatasetItem.model_validate(db_dataset_item)
 
     @staticmethod
+    def _cleanup_and_validate_annotations(
+        annotations: list[DatasetItemAnnotation],
+        task: Task,
+        labels: list[Label],
+        media: Media,
+        user_reviewed: bool,
+    ) -> list[DatasetItemAnnotation]:
+        if user_reviewed:
+            # if user reviewed, user has accepted all predictions and/or added new annotations,
+            # so confidence scores are no longer meaningful
+            annotations = [annotation.model_copy(update={"confidences": None}) for annotation in annotations]
+
+        DatasetService._validate_annotations_labels(annotations=annotations, labels=labels)
+        DatasetService._validate_annotation_shapes(annotations=annotations, task=task)
+        DatasetService._validate_annotations_coordinates(annotations=annotations, media=media)
+
+        return annotations
+
+    @staticmethod
     def _validate_annotations_labels(annotations: list[DatasetItemAnnotation], labels: Sequence[Label]) -> None:
         for annotation in annotations:
             for annotation_label in annotation.labels:
@@ -207,7 +220,7 @@ class DatasetService(BaseSessionManagedService):
                     raise AnnotationValidationError(f"Label {str(annotation_label.id)} is not found in the project.")
 
     @staticmethod
-    def _validate_annotations(annotations: list[DatasetItemAnnotation], task: Task) -> None:  # noqa: C901, PLR0912
+    def _validate_annotation_shapes(annotations: list[DatasetItemAnnotation], task: Task) -> None:  # noqa: C901, PLR0912
         match task.task_type:
             case TaskType.CLASSIFICATION:
                 if len(annotations) == 0:
@@ -246,15 +259,24 @@ class DatasetService(BaseSessionManagedService):
         for annotation in annotations:
             if isinstance(annotation.shape, Rectangle):
                 rect = annotation.shape
-                if rect.x > media.width or rect.x + rect.width > media.width:
-                    raise AnnotationValidationError("Rectangle coordinates are out of bounds")
-                if rect.y > media.height or rect.y + rect.height > media.height:
-                    raise AnnotationValidationError("Rectangle coordinates are out of bounds")
+                x1, x2 = rect.x, rect.x + rect.width
+                if x1 > media.width or x2 > media.width:
+                    raise AnnotationValidationError(
+                        f"Rectangle coordinates (x1={x1}, x2={x2}) are out of bounds for media width {media.width}"
+                    )
+                y1, y2 = rect.y, rect.y + rect.height
+                if y1 > media.height or y2 > media.height:
+                    raise AnnotationValidationError(
+                        f"Rectangle coordinates (y1={y1}, y2={y2}) are out of bounds for media height {media.height}"
+                    )
             if isinstance(annotation.shape, Polygon):
                 poly = annotation.shape
                 for point in poly.points:
                     if point.x > media.width or point.y > media.height:
-                        raise AnnotationValidationError("Polygon points are out of bounds")
+                        raise AnnotationValidationError(
+                            f"Polygon points (x={point.x}, y={point.y}) are out of bounds for media "
+                            f"({media.width}, {media.height})"
+                        )
 
     def set_dataset_item_annotations(
         self,
@@ -279,22 +301,18 @@ class DatasetService(BaseSessionManagedService):
             The updated dataset item.
         """
         labels = self._label_service.list_all(project_id=project.id)
-        DatasetService._validate_annotations_labels(annotations=annotations, labels=labels)
-        DatasetService._validate_annotations(annotations=annotations, task=project.task)
+        media = self._media_service.get_media_by_id(project_id=project.id, media_id=dataset_item_id)
+        annotations = DatasetService._cleanup_and_validate_annotations(
+            annotations=annotations, task=project.task, labels=labels, media=media, user_reviewed=user_reviewed
+        )
 
         repo = DatasetItemRepository(project_id=str(project.id), db=self.db_session)
-        self.get_dataset_item_by_id(project_id=project.id, dataset_item_id=dataset_item_id)
-        media = self._media_service.get_media_by_id(project_id=project.id, media_id=dataset_item_id)
-
-        DatasetService._validate_annotations_coordinates(annotations=annotations, media=media)
-
-        result = repo.set_annotation_data(
+        if not repo.set_annotation_data(
             obj_id=str(dataset_item_id),
             annotation_data=[annotation.model_dump(mode="json") for annotation in annotations],
             user_reviewed=user_reviewed,
             prediction_model_id=str(prediction_model_id) if prediction_model_id is not None else None,
-        )
-        if not result:
+        ):
             raise ResourceNotFoundError(ResourceType.DATASET_ITEM, str(dataset_item_id))
 
         repo.set_labels(
@@ -319,9 +337,12 @@ class DatasetService(BaseSessionManagedService):
         db_subset = repo.get_subset(str(dataset_item_id))
         if db_subset is None:
             raise ResourceNotFoundError(ResourceType.DATASET_ITEM, str(dataset_item_id))
-        if db_subset != DatasetItemSubset.UNASSIGNED:
+        if db_subset == DatasetItemSubset.UNASSIGNED:
+            repo.set_subset(obj_ids={str(dataset_item_id)}, subset=subset)
+        elif db_subset != subset:
             raise SubsetAlreadyAssignedError
-        repo.set_subset(obj_ids={str(dataset_item_id)}, subset=subset)
+        # If db_subset == subset, it's a no-op (same subset already assigned)
+
         return self.get_dataset_item_by_id(project_id=project_id, dataset_item_id=dataset_item_id)
 
     def get_dm_dataset(
@@ -330,13 +351,11 @@ class DatasetService(BaseSessionManagedService):
         task: Task,
         annotation_status: DatasetItemAnnotationStatus | None,
         sample_mode: SampleMode,
-        keep_predictions: bool = True,
     ) -> dm.Dataset:
         def get_dataset_items_and_media(offset: int, limit: int) -> list[tuple[DatasetItem, Media]]:
             return self.list_dataset_items_with_media(
                 project_id=project_id,
                 filters=DatasetItemFilters(limit=limit, offset=offset, annotation_status=annotation_status),
-                keep_predictions=keep_predictions,
             )
 
         def _get_media_path(media: Media) -> str:

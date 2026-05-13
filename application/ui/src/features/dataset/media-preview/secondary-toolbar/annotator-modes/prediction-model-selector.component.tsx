@@ -6,10 +6,14 @@ import { isEmpty } from 'lodash-es';
 
 import { usePredictionSetup } from '../../../../annotator/predictions-setup-provider.component';
 
-export const PredictionModelSelector = () => {
-    const { models, selectedModelId, changeSelectedModelId } = usePredictionSetup();
+type PredictionModelSelectorProps = {
+    isDisabled: boolean;
+};
 
-    if (isEmpty(models)) {
+export const PredictionModelSelector = ({ isDisabled }: PredictionModelSelectorProps) => {
+    const { selectableModels, selectedModelId, changeSelectedModelId } = usePredictionSetup();
+
+    if (isEmpty(selectableModels)) {
         return null;
     }
 
@@ -17,11 +21,12 @@ export const PredictionModelSelector = () => {
         <Picker
             isQuiet
             aria-label={'Select prediction model'}
-            items={models}
+            items={selectableModels}
             selectedKey={selectedModelId}
+            isDisabled={isDisabled}
             onSelectionChange={(key) => key !== null && changeSelectedModelId(String(key))}
         >
-            {(item) => <Item key={item.id}>{item.name}</Item>}
+            {(item) => <Item key={item.modelVariantId}>{item.name}</Item>}
         </Picker>
     );
 };

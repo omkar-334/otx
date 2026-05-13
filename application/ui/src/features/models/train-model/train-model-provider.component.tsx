@@ -3,20 +3,21 @@
 
 import { createContext, Dispatch, ReactNode, SetStateAction, use, useMemo, useState } from 'react';
 
+import { useGetDatasetRevisions } from 'hooks/use-get-dataset-revisions.hook';
+
 import {
     DatasetRevision,
-    DeviceType,
     Model,
     ModelArchitectureWithPerformanceCategory,
     TrainingConfiguration,
     TrainingDevice,
 } from '../../../constants/shared-types';
-import { useGetDatasetRevisions } from '../../../hooks/use-get-dataset-revisions.hook';
 import { useGetActiveModel } from '../hooks/api/use-get-active-model.hook';
 import { useGetTaskModelArchitectures } from '../hooks/api/use-get-model-architectures.hook';
-import { useGetModels } from '../hooks/api/use-get-models.hook';
+import { useGetSuccessfulModels } from '../hooks/api/use-get-models.hook';
 import { useGetTrainingDevices } from './api/use-get-training-devices';
 import { useTrainingConfiguration } from './hooks/use-training-configuration';
+import { getDefaultTrainingDevice } from './select-training-device/utils';
 
 type DatasetRevisionWithValue = Pick<DatasetRevision, 'id' | 'name'> & { value: string | null };
 type ModelRevisionWithValue = Pick<Model, 'id' | 'name' | 'architecture'> & { value: string | null };
@@ -30,8 +31,8 @@ export type TrainModelContextProps = {
     onSelectModelArchitectureId: (id: string | null) => void;
 
     trainingDevices: TrainingDevice[];
-    selectedTrainingDevice: DeviceType | null;
-    onSelectTrainingDevice: (deviceType: DeviceType | null) => void;
+    selectedTrainingDevice: string | null;
+    onSelectTrainingDevice: (deviceKey: string | null) => void;
 
     datasetRevisions: DatasetRevisionWithValue[];
     selectedDatasetRevisionId: string | null;
@@ -68,7 +69,7 @@ const useDatasetRevisions = () => {
 
 const TRAIN_FROM_SCRATCH = 'train-from-scratch';
 const useModelRevisions = () => {
-    const { data: models } = useGetModels();
+    const { data: models } = useGetSuccessfulModels();
 
     return {
         modelRevisions: [
@@ -101,6 +102,14 @@ const getDefaultModelRevisionIdForArchitecture = (
     return firstRevision?.id ?? revisionsForArchitecture.at(0)?.id ?? null;
 };
 
+export const createTrainingDeviceKey = (trainingDevice: TrainingDevice): string => {
+    if (trainingDevice.index == null) {
+        return trainingDevice.type;
+    }
+
+    return `${trainingDevice.type}-${trainingDevice.index}`;
+};
+
 export const TrainModelProvider = ({ children }: TrainModelProviderProps) => {
     const { modelArchitectures } = useGetTaskModelArchitectures();
     const { data: trainingDevices } = useGetTrainingDevices();
@@ -116,9 +125,10 @@ export const TrainModelProvider = ({ children }: TrainModelProviderProps) => {
         activeModelArchitecture?.id ?? null
     );
 
-    const [selectedTrainingDevice, setSelectedTrainingDevice] = useState<DeviceType | null>(
-        trainingDevices?.at(0)?.type ?? null
-    );
+    const [selectedTrainingDevice, setSelectedTrainingDevice] = useState<string | null>(() => {
+        const defaultDevice = getDefaultTrainingDevice(trainingDevices);
+        return defaultDevice ? createTrainingDeviceKey(defaultDevice) : null;
+    });
     const [selectedDatasetRevisionId, setSelectedDatasetRevisionId] = useState<string | null>(
         datasetRevisions?.at(0)?.id ?? null
     );

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { EncodingOutput } from '@geti/smart-tools/segment-anything';
-import { queryOptions, useQuery } from '@tanstack/react-query';
+import { queryOptions, skipToken, useQuery } from '@tanstack/react-query';
 import { Remote, wrap } from 'comlink';
 import { useProject } from 'hooks/api/project.hook';
 import { useProjectIdentifier } from 'hooks/use-project-identifier.hook';
@@ -18,33 +18,54 @@ import type {
 } from '../../webworkers/segment-anything.worker.interface';
 import { executeWithTimeout } from '../execute-with-timeout';
 import { convertToolShapeToGetiShape } from '../utils';
+import {
+    SAM_DECODER_TIMEOUT_MS,
+    SAM_ENCODER_TIMEOUT_MS,
+    SAM_ENCODING_GC_TIME_MS,
+    SAM_WORKER_BUILD_TIMEOUT_MS,
+    SAM_WORKER_INIT_TIMEOUT_MS,
+} from './sam-timeouts';
 import { InteractiveAnnotationPoint } from './segment-anything.interface';
 
 type SegmentAnythingRemoteInstance = Remote<SegmentAnythingWorkerInstance>;
-const SAM_TIMEOUT_MS = 5000;
 
-const getSegmentAnythingWorkerQueryKey = (algorithmType: 'SEGMENT_ANYTHING_DECODER' | 'SEGMENT_ANYTHING_ENCODER') =>
-    ['workers', algorithmType] as const;
-
-const segmentAnythingWorkerQueryOptions = (
-    algorithmType: 'SEGMENT_ANYTHING_DECODER' | 'SEGMENT_ANYTHING_ENCODER',
-    enabled = true
-) =>
-    queryOptions({
-        queryKey: getSegmentAnythingWorkerQueryKey(algorithmType),
-        queryFn: async () => {
-            const baseWorker = new Worker(new URL('../../webworkers/segment-anything.worker', import.meta.url), {
+// A single shared worker hosts BOTH the encoder and decoder ONNX sessions.
+// Spawning two workers used to double the OpenCV + ONNX Runtime WASM footprint
+// for no functional gain (encoder/decoder always run sequentially anyway).
+const segmentAnythingWorkerQueryOptions = (enabled = true) =>
+    queryOptions<{ worker: Worker; instance: SegmentAnythingRemoteInstance }>({
+        queryKey: ['workers', 'SEGMENT_ANYTHING'],
+        queryFn: async ({ signal }) => {
+            const worker = new Worker(new URL('../../webworkers/segment-anything.worker', import.meta.url), {
                 type: 'module',
             });
+            // Terminate the worker if the query is cancelled (e.g. annotator unmounts)
+            // before build/init resolve, so we don't leak the in-flight worker.
+            signal.addEventListener('abort', worker.terminate, { once: true });
+
             try {
-                const samWorker = wrap<SegmentAnythingWorkerApi>(baseWorker);
-                const model = await executeWithTimeout(samWorker.build(), 'SAM worker build', SAM_TIMEOUT_MS);
+                const samWorker = wrap<SegmentAnythingWorkerApi>(worker);
+                const instance = await executeWithTimeout(
+                    samWorker.build(),
+                    'SAM worker build',
+                    SAM_WORKER_BUILD_TIMEOUT_MS
+                );
 
-                await executeWithTimeout(model.init(algorithmType), 'SAM worker init', SAM_TIMEOUT_MS);
+                // Initialize encoder and decoder sessions in parallel inside the same worker.
+                await executeWithTimeout(
+                    Promise.all([instance.init('SEGMENT_ANYTHING_ENCODER'), instance.init('SEGMENT_ANYTHING_DECODER')]),
+                    'SAM worker init',
+                    SAM_WORKER_INIT_TIMEOUT_MS
+                );
 
-                return model;
+                if (signal.aborted) {
+                    throw signal.reason;
+                }
+
+                return { worker, instance };
             } catch (error) {
-                baseWorker.terminate();
+                worker.terminate();
+
                 throw error;
             }
         },
@@ -58,7 +79,7 @@ const getSegmentAnythingEncodingQueryKey = (mediaItem: Media) => {
         : ['segment-anything-model', 'encoding', mediaItem.id];
 };
 
-export const segmentAnythingEncodingQueryOptions = (
+const segmentAnythingEncodingQueryOptions = (
     mediaItem: Media,
     model: SegmentAnythingRemoteInstance | undefined,
     image: ImageData,
@@ -71,18 +92,18 @@ export const segmentAnythingEncodingQueryOptions = (
                 throw new Error('Model not yet initialized');
             }
 
-            return model.processEncoder(image);
+            return executeWithTimeout(model.processEncoder(image), 'SAM encoder', SAM_ENCODER_TIMEOUT_MS);
         },
         staleTime: Infinity,
-        gcTime: 3600 * 15,
+        gcTime: SAM_ENCODING_GC_TIME_MS,
         enabled,
     });
 
-export const useSegmentAnythingWorker = (
-    algorithmType: 'SEGMENT_ANYTHING_DECODER' | 'SEGMENT_ANYTHING_ENCODER',
-    enabled = true
-) => {
-    return useQuery(segmentAnythingWorkerQueryOptions(algorithmType, enabled));
+export const useSegmentAnythingWorker = (enabled = true) => {
+    return useQuery({
+        ...segmentAnythingWorkerQueryOptions(enabled),
+        select: (data) => data.instance,
+    });
 };
 
 const useEncodingQuery = (
@@ -93,22 +114,14 @@ const useEncodingQuery = (
 ) => {
     const isEnabled = model !== undefined && mediaItem !== undefined && image !== undefined && isImageReady;
 
-    return useQuery({
-        queryKey:
-            mediaItem === undefined
-                ? ['segment-anything-model', 'encoding', 'disabled']
-                : getSegmentAnythingEncodingQueryKey(mediaItem),
-        queryFn: async () => {
-            if (model === undefined || image === undefined) {
-                throw new Error('Model not yet initialized');
-            }
-
-            return executeWithTimeout(model.processEncoder(image), 'SAM encoder', SAM_TIMEOUT_MS);
-        },
-        staleTime: Infinity,
-        gcTime: 3600 * 15,
-        enabled: isEnabled,
-    });
+    return useQuery(
+        mediaItem !== undefined && image !== undefined
+            ? segmentAnythingEncodingQueryOptions(mediaItem, model, image, isEnabled)
+            : {
+                  queryKey: ['segment-anything-model', 'encoding', 'disabled'],
+                  queryFn: skipToken,
+              }
+    );
 };
 
 const useDecoderOutputType = () => {
@@ -143,13 +156,12 @@ const useDecodingFn = (model: SegmentAnythingRemoteInstance | undefined, encodin
             model.processDecoder(encoding, {
                 points,
                 boxes: [],
-                ouputConfig: {
+                outputConfig: {
                     type: decoderOutput,
                 },
-                image: undefined,
             }),
             'SAM decoder',
-            SAM_TIMEOUT_MS
+            SAM_DECODER_TIMEOUT_MS
         );
 
         return shapes.map(convertToolShapeToGetiShape);
@@ -161,12 +173,10 @@ type SegmentAnythingModelOptions = {
 };
 
 export const useSegmentAnythingModel = ({ nextMediaItem }: SegmentAnythingModelOptions = {}) => {
-    const encoderWorkerQuery = useSegmentAnythingWorker('SEGMENT_ANYTHING_ENCODER');
-    const decoderWorkerQuery = useSegmentAnythingWorker('SEGMENT_ANYTHING_DECODER');
-    const encoderModel = encoderWorkerQuery.data;
-    const decoderModel = decoderWorkerQuery.data;
-    const hasWorkerError = encoderWorkerQuery.isError || decoderWorkerQuery.isError;
-    const isLoadingWorkers = encoderWorkerQuery.isLoading || decoderWorkerQuery.isLoading;
+    const workerQuery = useSegmentAnythingWorker();
+    const model = workerQuery.data;
+    const hasWorkerError = workerQuery.isError;
+    const isLoadingWorkers = workerQuery.isLoading;
     const projectId = useProjectIdentifier();
 
     const { mediaItem, image, isImageReady } = useSelectedMediaItem();
@@ -176,18 +186,20 @@ export const useSegmentAnythingModel = ({ nextMediaItem }: SegmentAnythingModelO
     });
 
     // First we get the encoding for the CURRENT image
-    const encodingQuery = useEncodingQuery(encoderModel, mediaItem, image, isImageReady);
+    const encodingQuery = useEncodingQuery(model, mediaItem, image, isImageReady);
+
     // At the same time we start prefetching the encoding for the NEXT image,
     // so when the user moves to the next media item the decoding will be faster.
     // We don't need to get the decoding query result for the next image, we just want to cache the encoding result.
-    useEncodingQuery(encoderModel, nextMediaItem, nextImageQuery.data, nextImageQuery.isSuccess);
+    const canPrefetch = nextImageQuery.isSuccess && !encodingQuery.isFetching;
+    useEncodingQuery(model, nextMediaItem, nextImageQuery.data, canPrefetch);
 
-    const decodingQueryFn = useDecodingFn(decoderModel, encodingQuery.data);
+    const decodingQueryFn = useDecodingFn(model, encodingQuery.data);
 
     const isLoading = !hasWorkerError && (isLoadingWorkers || encodingQuery.isLoading);
     const isProcessing = encodingQuery.isFetching;
     const isError = hasWorkerError || encodingQuery.isError;
-    const error = encoderWorkerQuery.error ?? decoderWorkerQuery.error ?? encodingQuery.error;
+    const error = workerQuery.error ?? encodingQuery.error;
 
     return {
         isLoading,

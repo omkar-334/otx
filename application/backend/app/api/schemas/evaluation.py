@@ -23,7 +23,7 @@ class EvaluationMetricName(StrEnum):
     MAR_100 = "mAR@100"
 
 
-# Mapping from raw metric names (returned by OTX) to user-friendly metric names (returned by the API).
+# Mapping from raw metric names (returned by getitune) to user-friendly metric names (returned by the API).
 # All keys in this mapping are lowercase; the mapping is applied in a case-insensitive manner.
 RAW_METRICS_TO_API_METRICS = {
     "accuracy": EvaluationMetricName.ACCURACY,
@@ -122,7 +122,9 @@ class EvaluationView(BaseModel):
             A list of MetricView instances with user-friendly metric names and their values.
         """
         raw_keys = {k.lower(): k for k in metrics}
-        if "map" in raw_keys:
+        if "map_50" in raw_keys:
+            primary_metric_name = EvaluationMetricName.MAP_50
+        elif "map" in raw_keys:
             primary_metric_name = EvaluationMetricName.MAP
         elif "accuracy" in raw_keys:
             primary_metric_name = EvaluationMetricName.ACCURACY

@@ -4,12 +4,9 @@
 import { Flex, Grid, Item, Key, Picker, Tag, Text } from '@geti/ui';
 import { Accept, Search } from '@geti/ui/icons';
 import { clsx } from 'clsx';
-import { useProjectIdentifier } from 'hooks/use-project-identifier.hook';
 import { capitalize } from 'lodash-es';
 
-import { $api } from '../../../../api/client';
 import { DatasetSubset, Media } from '../../../../constants/shared-types';
-import { getQueryKey } from '../../../../query-client/query-client';
 import { Hotkeys } from '../primary-toolbar/hotkeys/hotkeys.component';
 import { Settings } from '../primary-toolbar/settings/settings.component';
 import { ToggleFocus } from '../primary-toolbar/toggle-focus.component';
@@ -21,57 +18,24 @@ import classes from './bottom-toolbar.module.scss';
 
 type BottomToolbarProps = {
     mediaItem: Media;
+    isUserReviewed?: boolean;
+    subset: DatasetSubset;
+    onSubsetChange?: (key: Key | null) => void;
     hideHotkeys?: boolean;
+    isReadOnlySubset: boolean;
+    hasAnnotationStatus?: boolean;
 };
 
-const DATASET_ITEM_OPERATION = 'get';
-const DATASET_ITEM_URL = '/api/projects/{project_id}/dataset/items/{dataset_item_id}';
-const UPDATE_SUBSET_OPERATION = 'patch';
-const UPDATE_SUBSET_URL = '/api/projects/{project_id}/dataset/items/{dataset_item_id}/subset';
-
-type AssignableSubset = Exclude<DatasetSubset, 'unassigned'>;
-
-const isAssignableSubset = (key: Key | null): key is AssignableSubset => key !== null && key !== 'unassigned';
-
-const useSubsets = (mediaItemId: string) => {
-    const projectId = useProjectIdentifier();
-
-    const datasetItemParamsPath = {
-        project_id: projectId,
-        dataset_item_id: mediaItemId,
-    };
-    const datasetItemParams = { params: { path: datasetItemParamsPath } };
-    const mediaListParams = { params: { path: { project_id: projectId } } };
-
-    const { data } = $api.useQuery(DATASET_ITEM_OPERATION, DATASET_ITEM_URL, datasetItemParams);
-
-    const updateSubsetMutation = $api.useMutation(UPDATE_SUBSET_OPERATION, UPDATE_SUBSET_URL, {
-        meta: {
-            invalidateQueries: [
-                getQueryKey([DATASET_ITEM_OPERATION, DATASET_ITEM_URL, datasetItemParams]),
-                getQueryKey(['get', '/api/projects/{project_id}/dataset/media', mediaListParams]),
-            ],
-        },
-    });
-
-    const handleSubsetChange = (key: Key | null) => {
-        if (!isAssignableSubset(key)) return;
-
-        updateSubsetMutation.mutate({
-            params: { path: datasetItemParamsPath },
-            body: { subset: key },
-        });
-    };
-
-    return { currentSubset: data?.subset ?? null, isUserReviewed: data?.user_reviewed ?? false, handleSubsetChange };
-};
-
-export const BottomToolbar = ({ mediaItem, hideHotkeys }: BottomToolbarProps) => {
+export const BottomToolbar = ({
+    hideHotkeys,
+    mediaItem,
+    isUserReviewed,
+    subset,
+    onSubsetChange,
+    isReadOnlySubset,
+    hasAnnotationStatus = true,
+}: BottomToolbarProps) => {
     const fileName = `${mediaItem.name}.${mediaItem.format} (${mediaItem.width} x ${mediaItem.height} px)`;
-
-    const { currentSubset, isUserReviewed, handleSubsetChange } = useSubsets(mediaItem.id);
-
-    const isUnassigned = currentSubset === 'unassigned' || currentSubset === null;
 
     return (
         <Flex justifyContent={'end'}>
@@ -86,28 +50,31 @@ export const BottomToolbar = ({ mediaItem, hideHotkeys }: BottomToolbarProps) =>
                     <Toolbar.Section>
                         <Flex gap={'size-100'} alignItems={'center'} height={'100%'}>
                             <Text UNSAFE_className={classes.filename}>{fileName}</Text>
-                            <Tag
-                                className={clsx({
-                                    [classes.accepted]: isUserReviewed,
-                                    [classes.forReview]: !isUserReviewed,
-                                })}
-                                prefix={isUserReviewed ? <Accept /> : <Search />}
-                                text={isUserReviewed ? 'Accepted' : 'For Review'}
-                            />
+                            {hasAnnotationStatus && (
+                                <Tag
+                                    className={clsx({
+                                        [classes.accepted]: isUserReviewed,
+                                        [classes.forReview]: !isUserReviewed,
+                                    })}
+                                    prefix={isUserReviewed ? <Accept /> : <Search />}
+                                    text={isUserReviewed ? 'Accepted' : 'For Review'}
+                                />
+                            )}
 
-                            {isUnassigned ? (
+                            {isReadOnlySubset ? (
+                                <Tag withDot={false} text={capitalize(subset)} id={'selected-subset-badge'} />
+                            ) : (
                                 <Picker
-                                    selectedKey={null}
+                                    selectedKey={subset}
                                     placeholder={'Select subset'}
                                     aria-label={'Select subset'}
-                                    onSelectionChange={handleSubsetChange}
+                                    onSelectionChange={onSubsetChange}
                                 >
+                                    <Item key={'unassigned'}>Unassigned</Item>
                                     <Item key={'validation'}>Validation</Item>
                                     <Item key={'testing'}>Testing</Item>
                                     <Item key={'training'}>Training</Item>
                                 </Picker>
-                            ) : (
-                                <Tag withDot={false} text={capitalize(String(currentSubset))} />
                             )}
                         </Flex>
                     </Toolbar.Section>

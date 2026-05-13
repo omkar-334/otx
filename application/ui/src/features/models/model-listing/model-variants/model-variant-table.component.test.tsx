@@ -1,30 +1,31 @@
-// Copyright (C) 2026 Intel Corporation
+// Copyright (C) 2025-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getMockedModel } from 'mocks/mock-model';
 import { getMockedVariant } from 'mocks/mock-model-variant';
+import { getMockedPipeline } from 'mocks/mock-pipeline';
+import { HttpResponse } from 'msw';
 import { render } from 'test-utils/render';
 
-import { useDownloadModel } from '../../hooks/api/use-download-model.hook';
+import { http } from '../../../../api/utils';
+import { server } from '../../../../msw-node-setup';
+import { downloadFile } from '../../../../shared/util';
 import { ModelVariantTable } from './model-variant-table.component';
 
-vi.mock('../../hooks/api/use-download-model.hook', () => ({
-    useDownloadModel: vi.fn(),
+vi.mock('../../../../shared/util', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../../../shared/util')>()),
+    downloadFile: vi.fn(),
 }));
 
-const mockDownloadModel = vi.fn();
+vi.mock('hooks/use-project-identifier.hook', () => ({
+    useProjectIdentifier: () => 'project-123',
+}));
 
 describe('ModelVariantTable', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-
-        vi.mocked(useDownloadModel).mockReturnValue({
-            downloadModel: mockDownloadModel,
-            isDownloading: false,
-            error: null,
-        });
     });
 
     it('shows primary testing metric value for a variant', () => {
@@ -187,8 +188,174 @@ describe('ModelVariantTable', () => {
 
         render(<ModelVariantTable model={model} format='openvino' />);
 
-        await userEvent.click(screen.getByRole('button', { name: 'Download model ov-1' }));
+        await userEvent.click(screen.getByRole('button', { name: /Model variant actions/ }));
+        await userEvent.click(screen.getByRole('menuitem', { name: 'Download' }));
 
-        expect(mockDownloadModel).toHaveBeenCalledWith('ov-1');
+        expect(downloadFile).toHaveBeenCalledWith(
+            expect.stringContaining(`/api/projects/project-123/models/${model.id}/variants/ov-1/binary`)
+        );
+    });
+
+    it('shows direct download button for non-openvino format', () => {
+        const model = getMockedModel({
+            variants: [
+                getMockedVariant({
+                    id: 'pt-1',
+                    format: 'pytorch',
+                    precision: 'fp32',
+                }),
+            ],
+        });
+
+        render(<ModelVariantTable model={model} format='pytorch' />);
+
+        expect(screen.getByRole('button', { name: 'Download model pt-1' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Model variant actions/ })).not.toBeInTheDocument();
+    });
+
+    it('sets variant as active via menu for openvino format', async () => {
+        const patchSpy = vi.fn();
+
+        server.use(
+            http.patch('/api/projects/{project_id}/pipeline', async ({ request }) => {
+                const body = await request.json();
+                patchSpy(body);
+                return HttpResponse.json(getMockedPipeline());
+            })
+        );
+
+        const model = getMockedModel({
+            variants: [
+                getMockedVariant({
+                    id: 'ov-1',
+                    format: 'openvino',
+                    precision: 'fp16',
+                }),
+            ],
+        });
+
+        render(<ModelVariantTable model={model} format='openvino' />);
+
+        await userEvent.click(screen.getByRole('button', { name: /Model variant actions/ }));
+        await userEvent.click(screen.getByRole('menuitem', { name: 'Set as active' }));
+
+        await waitFor(() => {
+            expect(patchSpy).toHaveBeenCalledWith({ model_id: 'ov-1' });
+        });
+    });
+
+    it.each(['pytorch', 'onnx'] as const)('%s format does not have a model variant actions menu', (format) => {
+        const model = getMockedModel({
+            variants: [
+                getMockedVariant({
+                    format,
+                    precision: 'fp32',
+                    quantization_info: null,
+                }),
+            ],
+        });
+
+        render(<ModelVariantTable model={model} format={format} />);
+
+        expect(screen.queryByLabelText(/Model variant actions/)).not.toBeInTheDocument();
+    });
+
+    describe('ModelVariantPrecisionRenderer', () => {
+        it('renders only uppercased precision text when variant has no quantization_info', () => {
+            const model = getMockedModel({
+                variants: [
+                    getMockedVariant({
+                        format: 'openvino',
+                        precision: 'fp16',
+                        quantization_info: null,
+                    }),
+                ],
+            });
+
+            render(<ModelVariantTable model={model} format='openvino' />);
+
+            expect(screen.getByText('FP16')).toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'Information' })).not.toBeInTheDocument();
+        });
+
+        it('renders precision text and contextual help popover with max_drop and calibration size when quantization_info is present', async () => {
+            const model = getMockedModel({
+                variants: [
+                    getMockedVariant({
+                        format: 'openvino',
+                        precision: 'int8',
+                        quantization_info: { max_drop: 0.02, max_calibration_subset_size: 100 },
+                    }),
+                ],
+            });
+
+            render(<ModelVariantTable model={model} format='openvino' />);
+
+            expect(screen.getByText('INT8')).toBeInTheDocument();
+
+            const infoButton = screen.getByRole('button', { name: 'Information' });
+            expect(infoButton).toBeInTheDocument();
+
+            await userEvent.click(infoButton);
+
+            expect(screen.getByText('Quantized with NNCF PTQ')).toBeInTheDocument();
+            expect(screen.getByText('Max accuracy drop: 2%')).toBeInTheDocument();
+            expect(screen.getByText('Calibration dataset size: 100')).toBeInTheDocument();
+        });
+
+        it('does not render max accuracy drop line when max_drop is null', async () => {
+            const model = getMockedModel({
+                variants: [
+                    getMockedVariant({
+                        format: 'openvino',
+                        precision: 'int8',
+                        quantization_info: { max_drop: null, max_calibration_subset_size: 50 },
+                    }),
+                ],
+            });
+
+            render(<ModelVariantTable model={model} format='openvino' />);
+
+            await userEvent.click(screen.getByRole('button', { name: 'Information' }));
+
+            expect(screen.queryByText(/Max accuracy drop/)).not.toBeInTheDocument();
+            expect(screen.getByText('Calibration dataset size: 50')).toBeInTheDocument();
+        });
+
+        it('renders max accuracy drop as 0% when max_drop is zero', async () => {
+            const model = getMockedModel({
+                variants: [
+                    getMockedVariant({
+                        format: 'openvino',
+                        precision: 'int8',
+                        quantization_info: { max_drop: 0, max_calibration_subset_size: 200 },
+                    }),
+                ],
+            });
+
+            render(<ModelVariantTable model={model} format='openvino' />);
+
+            await userEvent.click(screen.getByRole('button', { name: 'Information' }));
+
+            expect(screen.getByText('Max accuracy drop: 0%')).toBeInTheDocument();
+            expect(screen.getByText('Calibration dataset size: 200')).toBeInTheDocument();
+        });
+
+        it('does not render contextual help when both max_drop and calibration_subset_size are null', () => {
+            const model = getMockedModel({
+                variants: [
+                    getMockedVariant({
+                        format: 'openvino',
+                        precision: 'int8',
+                        quantization_info: { max_drop: null, max_calibration_subset_size: null },
+                    }),
+                ],
+            });
+
+            render(<ModelVariantTable model={model} format='openvino' />);
+
+            expect(screen.getByText('INT8')).toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'Information' })).not.toBeInTheDocument();
+        });
     });
 });

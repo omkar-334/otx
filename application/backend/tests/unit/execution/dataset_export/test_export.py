@@ -82,9 +82,8 @@ class TestDatasetExporter:
         fxt_dataset_service.get_dm_dataset.assert_called_once_with(
             project_id=fxt_export_params.project_id,
             task=fxt_export_params.task,
-            annotation_status=None if include_unannotated else DatasetItemAnnotationStatus.REVIEWED,
+            annotation_status=None if include_unannotated else DatasetItemAnnotationStatus.WITH_ANNOTATIONS,
             sample_mode=SampleMode.IMPORT_EXPORT,
-            keep_predictions=False,
         )
         if subsets:
             dataset.filter_by_subset.assert_called_once_with(subset=[Subset[subset.name] for subset in subsets])
@@ -159,6 +158,7 @@ class TestDatasetExporter:
                 data_format=data_format,
                 output_path=str(fxt_staged_datasets_dir / str(dataset_id) / f"dataset-{export_format}.zip"),
                 as_zip=True,
+                direct_only=True,
             )
 
     def test_export_dataset_geti(self, fxt_export: ExportDataset, fxt_staged_datasets_dir: Path):

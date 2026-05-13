@@ -116,7 +116,7 @@ const ParameterContextualHelp = ({ text }: { text: string }) => {
     );
 };
 
-export const ParameterName = ({ name, description, marginStart, gridColumn }: ParameterNameProps) => {
+const ParameterName = ({ name, description, marginStart, gridColumn }: ParameterNameProps) => {
     return (
         <Text marginStart={marginStart} gridColumn={gridColumn}>
             {name}
@@ -142,7 +142,7 @@ type ParameterReadOnlyProps = {
 
 type ParameterReadOnlyValueProps = Pick<ConfigurableParameter, 'value' | 'name'>;
 
-export const ParameterReadOnlyValue = ({ value, name }: ParameterReadOnlyValueProps) => {
+const ParameterReadOnlyValue = ({ value, name }: ParameterReadOnlyValueProps) => {
     if (isBoolean(value)) {
         return <span aria-label={name}>{value ? 'On' : 'Off'}</span>;
     }
@@ -287,7 +287,8 @@ const ParameterField = ({ parameter, onChange, isDisabled }: ParameterFieldProps
         return (
             <RangeParameterField
                 value={parameter.value}
-                defaultValue={parameter.default_value}
+                maxValue={parameter.max_value}
+                minValue={parameter.min_value}
                 onChange={handleChange}
                 isDisabled={isDisabled}
                 name={parameter.name}
@@ -369,7 +370,7 @@ const ParametersContainer = ({
     );
 };
 
-export const ParametersEnableGroup = ({
+const ParametersEnableGroup = ({
     parameters,
     onChange,
     isReadOnly,
@@ -387,7 +388,7 @@ export const ParametersEnableGroup = ({
     return (
         <ParametersContainer
             key={parameters.key}
-            rowGap={configurableParameters.length > 0 ? 'size-150' : 'size-0'}
+            rowGap={configurableParameters.length > 0 ? 'size-100' : 'size-0'}
             isReadOnly={isReadOnly}
             id={createTestId(parentGroupKeys, parameters.key)}
         >
@@ -424,7 +425,7 @@ const createTestId = (keys: string[] | undefined, parameterKey: string) => {
     return parameterKey;
 };
 
-export const ParametersGroup = ({
+const ParametersGroup = ({
     parametersGroup,
     onChange,
     isReadOnly = false,

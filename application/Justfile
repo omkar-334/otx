@@ -4,7 +4,7 @@ import "recipes.justfile"
 # -------------------------------------------------------------------------------------------------
 # Build variables
 # -------------------------------------------------------------------------------------------------
-docker-build-context := shell("git -C " + justfile_directory() + " rev-parse --show-toplevel")
+docker-build-context := justfile_directory() / ".."
 docker-build-args := "--build-arg http_proxy --build-arg https_proxy --build-arg no_proxy --build-arg HTTP_PROXY --build-arg HTTPS_PROXY --build-arg NO_PROXY"
 application-name := "geti"
 
@@ -46,6 +46,7 @@ build-image accelerator="cpu" tag="latest": install-uv
         {{ docker-build-args }} \
         {{ docker-build-context }} \
         -f "{{ justfile_directory() }}/docker/Dockerfile" \
+        --ulimit nofile=1048576:1048576 \
         --target "${IMAGE}" \
         ${TAG_ARGS} \
         ${CACHE_FROM_ARGS} \
@@ -56,7 +57,8 @@ build-image accelerator="cpu" tag="latest": install-uv
 [arg("accelerator", long="accelerator", short="a", pattern="cpu|xpu|cuda")]
 [arg("tag", long="tag", short="t")]
 [arg("host", long="host", short="h", help="Host address to bind the server to")]
-[arg("port", long="port", short="p", help="Port number to bind the server to")]
+[arg("port", long="port", short="p", help="Host port to publish (forwarded to the container's internal port)")]
+[arg("container-port", long="container-port", help="Container-internal port the server listens on")]
 [arg("container-name", long="name", short="n", help="Custom name for the container (defaults to geti-<accelerator>)")]
 [arg("detach", long="detach", short="d", value="true", help="Run the container in detached mode")]
 [arg("remove", long="remove", value="true", help="Automatically remove the container after it exits")]
@@ -68,9 +70,11 @@ build-image accelerator="cpu" tag="latest": install-uv
 [arg("coturn_host", long="coturn-host", help="Coturn server listening host (default: server's public IP)")]
 [arg("coturn_port", long="coturn-port", help="Coturn server listening port (default: 443)")]
 [arg("stun_server", long="stun", help="STUN server URL to use for WebRTC")]
-run-image accelerator="cpu" tag="latest" host="0.0.0.0" port="7860" container-name="" detach="false" remove="false" reload="false" shm-size="8g" passthrough-devices="" volumes="" enable_coturn="false" coturn_host="" coturn_port="443" stun_server="":
+[arg("gpu-slots", long="gpu-slots", help="Number of GPU slots available for model tuning (default: 1)")]
+run-image accelerator="cpu" tag="latest" host="0.0.0.0" port="7860" container-port="7860" container-name="" detach="false" remove="false" reload="false" shm-size="8g" passthrough-devices="" volumes="" enable_coturn="false" coturn_host="" coturn_port="443" stun_server="" gpu-slots="1":
     #!/usr/bin/env bash
     set -euo pipefail
+    shopt -s nullglob
 
     IMAGE_NAME="{{ application-name }}-{{ accelerator }}:{{ tag }}"
     if [[ -n "{{ container-name }}" ]]; then
@@ -78,6 +82,7 @@ run-image accelerator="cpu" tag="latest" host="0.0.0.0" port="7860" container-na
     else
         CONTAINER_NAME="{{ application-name }}-{{ accelerator }}"
     fi
+
 
     if ! docker image inspect "${IMAGE_NAME}" > /dev/null 2>&1; then
         echo "Error: Docker image '${IMAGE_NAME}' not found." >&2
@@ -143,24 +148,39 @@ run-image accelerator="cpu" tag="latest" host="0.0.0.0" port="7860" container-na
     # For XPU acceleration, we need to pass through the appropriate render device and group permissions
     extra_render_args=()
     if [[ "{{ accelerator }}" == "xpu" ]]; then
-      RENDER_GID=$($PYTHON -c "import grp; print((grp.getgrnam('render').gr_gid) if any(g.gr_name == 'render' for g in grp.getgrall()) else '')")
-      RENDER_NODE=$($PYTHON -c "from pathlib import Path; print(render_nodes[0]) if (render_nodes := sorted(Path('/dev/dri').glob('renderD*'))) else ''")
-      if [[ -n "$RENDER_NODE" ]]; then
-        extra_render_args+=(--device "$RENDER_NODE")
-      fi
-      if [[ -n "$RENDER_GID" ]]; then
-        extra_render_args+=(--group-add "$RENDER_GID")
-      fi
+      RENDER_GID=$(getent group render | cut -d: -f3)
+      for node in /dev/dri/renderD*; do
+        vendor=$(cat /sys/class/drm/$(basename "$node")/device/vendor 2>/dev/null)
+        [[ "$vendor" == "0x8086" ]] && extra_render_args+=(--device "$node")
+      done
+      [[ -n "$RENDER_GID" ]] && extra_render_args+=(--group-add "$RENDER_GID")
     fi
 
     passthrough_devices_args=()
+    has_video_device=false
     for dev in {{ passthrough-devices }}; do
         if [[ -e "$dev" ]]; then
             passthrough_devices_args+=(--device "$dev":"$dev")
+            # Track if any video device is being passed through
+            if [[ "$dev" == /dev/video* ]]; then
+                has_video_device=true
+            fi
         else
             echo "Warning: device '$dev' not found, skipping." >&2
         fi
     done
+
+    # When a video device is passed through, add the host's video group so the
+    # container process can actually open /dev/videoN (the in-container 'video'
+    # group created in the Dockerfile may have a different GID than the host's).
+    if [[ "$has_video_device" == "true" ]]; then
+        VIDEO_GID=$(getent group video | cut -d: -f3)
+        if [[ -n "$VIDEO_GID" ]]; then
+            passthrough_devices_args+=(--group-add "$VIDEO_GID")
+        else
+            echo "Warning: could not resolve host 'video' group GID; camera access may fail." >&2
+        fi
+    fi
 
     SHM_SIZE_FLAG=""
     if [[ -n "{{ shm-size }}" ]]; then
@@ -183,23 +203,30 @@ run-image accelerator="cpu" tag="latest" host="0.0.0.0" port="7860" container-na
         volume_args+=(--volume "$vol")
     done
 
+    GPU_FLAG=""
+    if [[ "{{ accelerator }}" == "cuda" ]]; then
+        GPU_FLAG="--gpus all"
+    fi
+
     echo "Running docker container from image: ${IMAGE_NAME}"
     docker run \
         {{ docker-run-args }} \
+        $GPU_FLAG \
         --publish {{ webrtc-ports }}:{{ webrtc-ports }}/udp \
-        --publish {{ port }}:{{ port }} \
+        --publish {{ port }}:{{ container-port }} \
         --env HOST={{ host }} \
-        --env PORT={{ port }} \
+        --env PORT={{ container-port }} \
+        --env GPU_SLOTS={{ gpu-slots }} \
         --env WEBRTC_ADVERTISE_IP="${HOST_IP}" \
         $COTURN_ENV \
         $STUN_ENV \
         --sysctl net.ipv4.ip_local_port_range="{{ replace(webrtc-ports, '-', ' ') }}" \
         --volume {{ data-volume }}:/application/data/ \
         --volume {{ logs-volume }}:/application/logs/ \
-        "${volume_args[@]}" \
+        ${volume_args[@]+"${volume_args[@]}"} \
         $WSL_LIB_FLAG \
-        "${passthrough_devices_args[@]}" \
-        "${extra_render_args[@]}" \
+        ${passthrough_devices_args[@]+"${passthrough_devices_args[@]}"} \
+        ${extra_render_args[@]+"${extra_render_args[@]}"} \
         $SHM_SIZE_FLAG \
         --name "${CONTAINER_NAME}" \
         $DETACH_FLAG \
@@ -213,3 +240,47 @@ run-image accelerator="cpu" tag="latest" host="0.0.0.0" port="7860" container-na
 # Remove persisted data and logs volumes
 clean-volumes:
     docker volume rm {{ data-volume }} {{ logs-volume }} || true
+
+# Build the macOS .app distributable.
+#
+# Runs `tauri build` and then patches the bundle layout: the PyInstaller
+# sidecar and its `_internal/` directory are moved from `Contents/MacOS/` and
+# `Contents/Resources/` respectively into `Contents/MacOS/backend/`. Without
+# this, PyInstaller's bootloader detects the `.app` bundle path and switches
+# to "macOS bundle" mode, looking for shared libraries under
+# `Contents/Frameworks/` (which Tauri doesn't populate) instead of the
+# standalone `_internal/` layout it actually shipped — the sidecar then dies
+# on launch with `Failed to load Python shared library 'libpython*.dylib'`.
+# Putting the sidecar one directory deeper avoids the bundle detection.
+#
+# The Rust shell handles either layout — see `locate_backend()` in
+# `ui/src-tauri/src/backend.rs`.
+[macos]
+tauri-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ui && npx tauri build
+    APP="src-tauri/target/release/bundle/macos/Geti.app"
+    if [[ ! -d "$APP" ]]; then
+        echo "Expected bundle not found at $APP" >&2
+        exit 1
+    fi
+    BACKEND_DIR="$APP/Contents/MacOS/backend"
+    mkdir -p "$BACKEND_DIR"
+    if [[ -f "$APP/Contents/MacOS/geti-backend" ]]; then
+        echo "▶ Moving sidecar into $BACKEND_DIR"
+        mv "$APP/Contents/MacOS/geti-backend" "$BACKEND_DIR/geti-backend"
+    fi
+    if [[ -d "$APP/Contents/Resources/_internal" ]]; then
+        echo "▶ Moving _internal into $BACKEND_DIR"
+        mv "$APP/Contents/Resources/_internal" "$BACKEND_DIR/_internal"
+    fi
+    echo "✅ Bundle ready at $APP"
+
+# `tauri build` on non-macOS platforms (Windows .msi/.exe, Linux AppImage/.deb).
+# The flat install layout doesn't trigger PyInstaller's bundle detection, so
+# no post-build patching is needed.
+[linux]
+[windows]
+tauri-build:
+    cd ui && npx tauri build

@@ -1,6 +1,7 @@
 #  Copyright (C) 2026 Intel Corporation
 #  SPDX-License-Identifier: Apache-2.0
 
+import types
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Union, cast, get_args, get_origin
 
@@ -87,6 +88,8 @@ class FloatRangeParameterView(_BaseConfigurableParameterView):
     value_type: Literal["float_range"] = "float_range"
     value: tuple[float, float] = Field(title="Actual value of the parameter")
     default_value: tuple[float, float] = Field(title="Default value of the parameter")
+    min_value: float = Field(title="Minimum value for range elements.")
+    max_value: float = Field(title="Maximum value for range elements.")
 
 
 def _parameter_view_discriminator(v: dict | _BaseConfigurableParameterView) -> str:
@@ -171,19 +174,34 @@ class TrainingConfigurationView(BaseModel):
         return min_value, max_value
 
     @classmethod
+    def _extract_range_bounds(cls, field_info: FieldInfo) -> tuple[float, float]:
+        """Extract min_value/max_value bounds for float_range fields from json_schema_extra."""
+        if not isinstance(field_info.json_schema_extra, dict):
+            raise ValueError(
+                f"Field '{field_info.title}' must have a json_schema_extra to define min and max range parameters"
+            )
+        min_value = field_info.json_schema_extra["min_value"]
+        max_value = field_info.json_schema_extra["max_value"]
+        if not isinstance(min_value, float) or not isinstance(max_value, float):
+            raise ValueError(
+                f"Field '{field_info.title}' must have float min and max in json_schema_extra for range parameters"
+            )
+        return min_value, max_value
+
+    @classmethod
     def _get_value_type(cls, field_info: FieldInfo) -> Literal["bool", "int", "float", "str", "float_range"]:  # noqa: C901, PLR0911
         """Determine the value type from field annotation."""
         annotation = field_info.annotation
 
         # Handle Optional/Union types by extracting the non-None type
-        if hasattr(annotation, "__origin__"):
-            origin = get_origin(annotation)
-            if origin is Union:
-                args = [arg for arg in get_args(annotation) if arg is not type(None)]
-                if args:
-                    annotation = args[0]
-                    origin = get_origin(annotation)
+        origin = get_origin(annotation)
+        if origin is Union or origin is types.UnionType:
+            args = [arg for arg in get_args(annotation) if arg is not type(None)]
+            if args:
+                annotation = args[0]
+                origin = get_origin(annotation)
 
+        if hasattr(annotation, "__origin__") or origin is not None:
             # Detect Literal[StrEnum member] -> treat as str
             if cls._get_literal_strenum_class(annotation) is not None:  # pyrefly: ignore[bad-argument-type]
                 return "str"
@@ -294,7 +312,8 @@ class TrainingConfigurationView(BaseModel):
         if value_type == "bool":
             return BoolParameterView(**common_kwargs)  # type: ignore
         if value_type == "float_range":
-            return FloatRangeParameterView(**common_kwargs, allowed_values=allowed_values)  # type: ignore
+            min_value, max_value = cls._extract_range_bounds(field_info)
+            return FloatRangeParameterView(**common_kwargs, min_value=min_value, max_value=max_value)  # type: ignore
         return StringParameterView(**common_kwargs, allowed_values=allowed_values)  # type: ignore
 
     @classmethod
@@ -307,6 +326,9 @@ class TrainingConfigurationView(BaseModel):
             allowed_values_from = cast(str | None, field_info.json_schema_extra.get("allowed_values_from"))
             if allowed_values_from is not None:
                 allowed_values = getattr(model, allowed_values_from, None)
+            read_only = cast(bool | None, field_info.json_schema_extra.get("read_only"))
+            if read_only:
+                allowed_values = [str(field_info.default)]
 
         if allowed_values is None:
             annotation = field_info.annotation
@@ -630,6 +652,121 @@ class TrainingConfigurationView(BaseModel):
                             },
                             {
                                 "type": "parameter_group",
+                                "key": "intensity_mapping",
+                                "name": "Intensity mapping",
+                                "description": (
+                                    "Intensity mapping parameters control how raw pixel values are normalised to [0, 1]"
+                                    " range before training. This is especially important for images with non-standard "
+                                    "bit depths (e.g. 16-bit), where the default [0, 255] assumption does not hold."
+                                ),
+                                "parameters": [
+                                    {
+                                        "type": "parameter",
+                                        "key": "mode",
+                                        "name": "Intensity mapping mode",
+                                        "description": (
+                                            "Strategy used to transform pixel intensities. "
+                                            "'Unit interval scaling' divides by max_value, thus mapping the range "
+                                            "[0, max_value] to [0, 1]. 'Windowing' isolates a specific intensity "
+                                            "range, mapping a specific window (specified with center and "
+                                            "width) to [0, 1] and clipping values outside the window. "
+                                            "'Range scaling with clipping' multiplies pixel values by a scale factor, "
+                                            "clips the result to a specified range (clip_min_value, clip_max_value) "
+                                            "and finally normalizes to [0, 1]."
+                                        ),
+                                        "value": "Unit interval scaling",
+                                        "default_value": "Unit interval scaling",
+                                        "value_type": "str",
+                                        "allowed_values": [
+                                            "Unit interval scaling",
+                                            "Windowing",
+                                            "Range scaling with clipping",
+                                        ],
+                                    },
+                                    {
+                                        "type": "parameter",
+                                        "key": "max_value",
+                                        "name": "Maximum pixel value",
+                                        "description": (
+                                            "Maximum possible pixel value in the raw image. "
+                                            "For 8-bit images use 255, for 16-bit images use 65535."
+                                        ),
+                                        "value": 255.0,
+                                        "default_value": 255.0,
+                                        "value_type": "float",
+                                        "min_value": 0.0,
+                                        "max_value": None,
+                                        "allowed_values": None,
+                                    },
+                                    {
+                                        "type": "parameter",
+                                        "key": "min_value",
+                                        "name": "Minimum output value",
+                                        "description": (
+                                            "Minimum output value after rescaling the image; "
+                                            "Pixel values below this threshold are clipped."
+                                        ),
+                                        "value": 0.0,
+                                        "default_value": 0.0,
+                                        "value_type": "float",
+                                        "min_value": None,
+                                        "max_value": None,
+                                        "allowed_values": None,
+                                        "depends_on": {"mode": "Range scaling with clipping"},
+                                    },
+                                    {
+                                        "type": "parameter",
+                                        "key": "window_center",
+                                        "name": "Window center",
+                                        "description": (
+                                            "Center of the intensity window for 'windowing' mode. Together with width, "
+                                            "it defines the intensity range that is mapped to [0, 1]."
+                                        ),
+                                        "value": 127.5,
+                                        "default_value": 127.5,
+                                        "value_type": "float",
+                                        "min_value": None,
+                                        "max_value": None,
+                                        "allowed_values": None,
+                                        "depends_on": {"mode": "Windowing"},
+                                    },
+                                    {
+                                        "type": "parameter",
+                                        "key": "window_width",
+                                        "name": "Window width",
+                                        "description": (
+                                            "Width of the intensity window for 'windowing' mode. "
+                                            "The effective range is [center - width/2, center + width/2], "
+                                            "mapped linearly to [0, 1]."
+                                        ),
+                                        "value": 255.0,
+                                        "default_value": 255.0,
+                                        "value_type": "float",
+                                        "min_value": 0.0,
+                                        "max_value": None,
+                                        "allowed_values": None,
+                                        "depends_on": {"mode": "Windowing"},
+                                    },
+                                    {
+                                        "type": "parameter",
+                                        "key": "scale_factor",
+                                        "name": "Scale factor",
+                                        "description": (
+                                            "Multiplicative factor applied to pixel values, before clipping the result "
+                                            "to [min_value, max_value]."
+                                        ),
+                                        "value": 1.0,
+                                        "default_value": 1.0,
+                                        "value_type": "float",
+                                        "min_value": 0.0,
+                                        "max_value": None,
+                                        "allowed_values": None,
+                                        "depends_on": {"mode": "Range scaling with clipping"},
+                                    },
+                                ],
+                            },
+                            {
+                                "type": "parameter_group",
                                 "key": "augmentation",
                                 "name": "Data augmentation",
                                 "description": (
@@ -724,7 +861,8 @@ class TrainingConfigurationView(BaseModel):
                                                 "value": [0.5, 1.5],
                                                 "default_value": [0.5, 1.5],
                                                 "value_type": "float_range",
-                                                "allowed_values": None,
+                                                "min_value": 0.0,
+                                                "max_value": 10.0,
                                             },
                                             {
                                                 "type": "parameter",
@@ -845,7 +983,8 @@ class TrainingConfigurationView(BaseModel):
                                                 "value": [0.875, 1.125],
                                                 "default_value": [0.875, 1.125],
                                                 "value_type": "float_range",
-                                                "allowed_values": None,
+                                                "min_value": 0.0,
+                                                "max_value": 5.0,
                                             },
                                             {
                                                 "type": "parameter",
@@ -860,7 +999,8 @@ class TrainingConfigurationView(BaseModel):
                                                 "value": [0.5, 1.5],
                                                 "default_value": [0.5, 1.5],
                                                 "value_type": "float_range",
-                                                "allowed_values": None,
+                                                "min_value": 0.0,
+                                                "max_value": 5.0,
                                             },
                                             {
                                                 "type": "parameter",
@@ -875,7 +1015,8 @@ class TrainingConfigurationView(BaseModel):
                                                 "value": [0.5, 1.5],
                                                 "default_value": [0.5, 1.5],
                                                 "value_type": "float_range",
-                                                "allowed_values": None,
+                                                "min_value": 0.0,
+                                                "max_value": 5.0,
                                             },
                                             {
                                                 "type": "parameter",
@@ -890,7 +1031,8 @@ class TrainingConfigurationView(BaseModel):
                                                 "value": [-0.05, 0.05],
                                                 "default_value": [-0.05, 0.05],
                                                 "value_type": "float_range",
-                                                "allowed_values": None,
+                                                "min_value": -0.5,
+                                                "max_value": 0.5,
                                             },
                                             {
                                                 "type": "parameter",
@@ -951,7 +1093,8 @@ class TrainingConfigurationView(BaseModel):
                                                 "value": [0.1, 2.0],
                                                 "default_value": [0.1, 2.0],
                                                 "value_type": "float_range",
-                                                "allowed_values": None,
+                                                "min_value": 0.0,
+                                                "max_value": 10.0,
                                             },
                                             {
                                                 "type": "parameter",

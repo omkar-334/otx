@@ -7,7 +7,7 @@ import { Grid, Text } from '@geti/ui';
 
 import { TrainingConfigurationParameter } from '../../../../constants/shared-types';
 import { useGetModelTrainingConfiguration } from '../../hooks/api/use-get-model-training-configuration.hook';
-import { filterDependentParameters } from '../../train-model/advanced-settings/training/learning-parameters/utils';
+import { filterDependentParameters } from '../../train-model/advanced-settings/utils';
 import { Box } from '../components/box/box.component';
 import { findGroupByKey, flattenParameters } from './utils';
 
@@ -54,8 +54,10 @@ export const ModelTrainingParameters = ({ modelId }: ModelTrainingParametersProp
     const datasetPreparationGroup = findGroupByKey(data?.parameters, 'dataset_preparation');
     const filteringGroup = findGroupByKey(datasetPreparationGroup?.parameters, 'filtering');
     const augmentationGroup = findGroupByKey(datasetPreparationGroup?.parameters, 'augmentation');
+    const intensityMappingGroup = findGroupByKey(datasetPreparationGroup?.parameters, 'intensity_mapping');
 
     const learningParameters = filterDependentParameters(trainingGroup?.parameters ?? []);
+    const intensityMappingParameters = filterDependentParameters(intensityMappingGroup?.parameters ?? []);
 
     return (
         <Grid columns={['1fr', '1fr', '1fr']} gap={'size-200'}>
@@ -76,6 +78,12 @@ export const ModelTrainingParameters = ({ modelId }: ModelTrainingParametersProp
                 contentClassName={classes.scrollableContent}
                 title={'AUGMENTATIONS'}
                 content={<TrainingConfigurationParametersList parameters={augmentationGroup?.parameters || []} />}
+            />
+            <Box
+                testId={'Box-INTENSITY MAPPING'}
+                contentClassName={classes.scrollableContent}
+                title={'INTENSITY MAPPING'}
+                content={<TrainingConfigurationParametersList parameters={intensityMappingParameters} />}
             />
         </Grid>
     );

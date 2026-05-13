@@ -1,6 +1,6 @@
 # Copyright (C) 2025 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -9,12 +9,12 @@ import pytest
 from fastapi import status
 
 from app.api.dependencies import get_dataset_service
-from app.api.schemas.dataset_item import DatasetItemAssignSubset, DatasetItemSubset, DatasetItemView
+from app.api.schemas.dataset_item import DatasetItemSubset, DatasetItemView
 from app.main import app
 from app.models import DatasetItem, DatasetItemAnnotationStatus
 from app.models.dataset import DatasetStatistics
 from app.services import DatasetService, ResourceNotFoundError, ResourceType
-from app.services.dataset_service import DatasetItemFilters, SubsetAlreadyAssignedError
+from app.services.dataset_service import DatasetItemFilters
 
 
 @pytest.fixture
@@ -101,6 +101,38 @@ class TestDatasetItemEndpoints:
             ),
         )
 
+    def test_list_dataset_items_naive_dates_are_normalized_to_utc(
+        self, fxt_get_project, fxt_dataset_item, fxt_dataset_service, fxt_client
+    ):
+        fxt_dataset_service.count_dataset_items.return_value = 1
+        fxt_dataset_service.list_dataset_items.return_value = [fxt_dataset_item]
+
+        response = fxt_client.get(
+            f"/api/projects/{str(uuid4())}/dataset/items?start_date=2025-01-09T00:00:00&end_date=2025-12-31T23:59:59"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        fxt_dataset_service.count_dataset_items.assert_called_once_with(
+            project=fxt_get_project,
+            start_date=datetime(2025, 1, 9, 0, 0, 0, tzinfo=UTC),
+            end_date=datetime(2025, 12, 31, 23, 59, 59, tzinfo=UTC),
+            annotation_status=None,
+            label_ids=None,
+            subset=None,
+        )
+        fxt_dataset_service.list_dataset_items.assert_called_once_with(
+            project_id=fxt_get_project.id,
+            filters=DatasetItemFilters(
+                limit=10,
+                offset=0,
+                start_date=datetime(2025, 1, 9, 0, 0, 0, tzinfo=UTC),
+                end_date=datetime(2025, 12, 31, 23, 59, 59, tzinfo=UTC),
+                annotation_status=None,
+                label_ids=None,
+                subset=None,
+            ),
+        )
+
     @pytest.mark.parametrize("limit", [1000, 0, -20])
     def test_list_dataset_items_wrong_limit(self, fxt_get_project, fxt_dataset_service, fxt_client, limit):
         response = fxt_client.get(f"/api/projects/{uuid4()}/dataset/items?limit=${limit}")
@@ -127,9 +159,8 @@ class TestDatasetItemEndpoints:
     @pytest.mark.parametrize(
         "annotation_status",
         [
-            DatasetItemAnnotationStatus.UNANNOTATED,
-            DatasetItemAnnotationStatus.REVIEWED,
-            DatasetItemAnnotationStatus.TO_REVIEW,
+            DatasetItemAnnotationStatus.MISSING_ANNOTATIONS,
+            DatasetItemAnnotationStatus.WITH_ANNOTATIONS,
         ],
     )
     def test_list_dataset_items_with_annotation_status(
@@ -197,7 +228,6 @@ class TestDatasetItemEndpoints:
         "http_method, http_path, service_method",
         [
             ("get", f"/api/projects/{uuid4()}/dataset/items/invalid-id", "get_dataset_item_by_id"),
-            ("patch", f"/api/projects/{uuid4()}/dataset/items/invalid-id/subset", "assign_dataset_item_subset"),
         ],
     )
     def test_invalid_ids(
@@ -236,76 +266,6 @@ class TestDatasetItemEndpoints:
             project_id=fxt_get_project.id, dataset_item_id=fxt_dataset_item.id
         )
 
-    def test_assign_dataset_item_subset(self, fxt_get_project, fxt_dataset_service, fxt_dataset_item, fxt_client):
-        dataset_item_id = uuid4()
-
-        fxt_dataset_service.assign_dataset_item_subset.return_value = fxt_dataset_item
-
-        response = fxt_client.patch(
-            f"/api/projects/{str(uuid4())}/dataset/items/{str(dataset_item_id)}/subset",
-            json=DatasetItemAssignSubset(subset=DatasetItemSubset.TRAINING).model_dump(mode="json"),
-        )
-
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json() == {
-            "id": str(fxt_dataset_item.id),
-            "user_reviewed": False,
-            "subset": "unassigned",
-        }
-        fxt_dataset_service.assign_dataset_item_subset.assert_called_once_with(
-            project_id=fxt_get_project.id,
-            dataset_item_id=dataset_item_id,
-            subset=DatasetItemSubset.TRAINING,
-        )
-
-    def test_assign_dataset_item_subset_not_found(self, fxt_get_project, fxt_dataset_service, fxt_client):
-        dataset_item_id = uuid4()
-
-        fxt_dataset_service.assign_dataset_item_subset.side_effect = ResourceNotFoundError(
-            ResourceType.DATASET_ITEM, str(dataset_item_id)
-        )
-
-        response = fxt_client.patch(
-            f"/api/projects/{str(uuid4())}/dataset/items/{str(dataset_item_id)}/subset",
-            json=DatasetItemAssignSubset(subset=DatasetItemSubset.TRAINING).model_dump(mode="json"),
-        )
-
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-        fxt_dataset_service.assign_dataset_item_subset.assert_called_once_with(
-            project_id=fxt_get_project.id,
-            dataset_item_id=dataset_item_id,
-            subset=DatasetItemSubset.TRAINING,
-        )
-
-    def test_assign_dataset_item_subset_already_assigned(self, fxt_get_project, fxt_dataset_service, fxt_client):
-        dataset_item_id = uuid4()
-
-        fxt_dataset_service.assign_dataset_item_subset.side_effect = SubsetAlreadyAssignedError
-
-        response = fxt_client.patch(
-            f"/api/projects/{str(uuid4())}/dataset/items/{str(dataset_item_id)}/subset",
-            json=DatasetItemAssignSubset(subset=DatasetItemSubset.TRAINING).model_dump(mode="json"),
-        )
-
-        assert response.status_code == status.HTTP_409_CONFLICT
-        fxt_dataset_service.assign_dataset_item_subset.assert_called_once_with(
-            project_id=fxt_get_project.id,
-            dataset_item_id=dataset_item_id,
-            subset=DatasetItemSubset.TRAINING,
-        )
-
-    @pytest.mark.parametrize("subset", ["unassigned", "foobar"])
-    def test_assign_dataset_item_subset_invalid_subset(self, fxt_get_project, fxt_dataset_service, fxt_client, subset):
-        dataset_item_id = uuid4()
-
-        response = fxt_client.patch(
-            f"/api/projects/{str(uuid4())}/dataset/items/{str(dataset_item_id)}/subset",
-            json='{"subset": "' + subset + '"}',
-        )
-
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-        fxt_dataset_service.assign_dataset_item_subset.assert_not_called()
-
     def test_get_dataset_statistics(self, fxt_get_project, fxt_dataset_service, fxt_client):
         statistics_dict = {
             "images": 5,
@@ -318,6 +278,7 @@ class TestDatasetItemEndpoints:
             "instances_per_label": [
                 {"label_id": "11111111-1111-1111-1111-111111111111", "instances": 5},
                 {"label_id": "22222222-2222-2222-2222-222222222222", "instances": 2},
+                {"label_id": None, "instances": 3},
             ],
         }
         # Patch the service to return a DatasetStatistics model with the correct fields
@@ -340,6 +301,7 @@ class TestDatasetItemEndpoints:
                 "instances_per_label": [
                     {"label_id": "11111111-1111-1111-1111-111111111111", "instances": 5},
                     {"label_id": "22222222-2222-2222-2222-222222222222", "instances": 2},
+                    {"label_id": None, "instances": 3},
                 ],
             },
         }

@@ -12,8 +12,8 @@ from datumaro.experimental.fields import ImageInfo as DmImageInfo
 from torch import LongTensor
 from torchvision import tv_tensors
 
-from otx.data.augmentation.transforms import Resize
-from otx.data.entity.sample import (
+from getitune.data.augmentation.transforms import Resize
+from getitune.data.entity.sample import (
     DetectionSample,
     InstanceSegmentationSample,
 )
@@ -122,6 +122,7 @@ class TestResize:
         resize = Resize(size=(64, 64), resize_targets=False, keep_aspect_ratio=False)
         entity = deepcopy(square_image_entity)
         original_bboxes = entity.bboxes.clone()
+        assert entity.masks is not None
         original_masks_shape = entity.masks.shape[-2:]
 
         result = resize(entity)
@@ -129,6 +130,7 @@ class TestResize:
         assert result.image.shape[-2:] == (64, 64)
         # Bboxes and masks should be unchanged
         assert torch.equal(result.bboxes, original_bboxes)
+        assert result.masks is not None
         assert result.masks.shape[-2:] == original_masks_shape
 
     # ==================== Aspect Ratio Preservation Tests ====================
@@ -240,6 +242,37 @@ class TestResize:
             top_row_mean = result.image[:, 0, :].float().mean()
             assert abs(top_row_mean - pad_value) < 1.0
 
+    def test_resize_pad_value_normalised_for_float_image(self, wide_image_entity: InstanceSegmentationSample) -> None:
+        """``pad_value`` expressed in 0-255 range must be rescaled for float images.
+
+        Recipes (e.g. RTMDet/YOLOX letterbox) configure ``pad_value: 114`` while
+        the runtime image tensor is float32 in ``[0, 1]``. Without rescaling, the
+        padded region would be filled with 114.0, completely dominating any
+        downstream ImageNet-style normalisation.
+        """
+        pad_value = 114
+        resize = Resize(
+            size=(128, 128),
+            keep_aspect_ratio=True,
+            resize_targets=False,
+            pad_value=pad_value,
+        )
+        entity = deepcopy(wide_image_entity)
+        # Mimic the production CPU pipeline which scales uint8 → float32 in [0, 1]
+        # before any geometric augmentation runs.
+        entity.image = tv_tensors.Image(entity.image.float().div(255.0))
+
+        result = resize(entity)
+
+        # Wide image (100x200) → resized to 128x64 → padded bottom-right.
+        # The bottom row should be entirely padding.
+        pad_bottom = result.img_info.pad_offset[3]
+        assert pad_bottom > 0
+        bottom_row_mean = result.image[:, -1, :].float().mean().item()
+        assert abs(bottom_row_mean - pad_value / 255.0) < 1e-3
+        # Padding must stay within the image's [0, 1] range.
+        assert result.image.max().item() <= 1.0 + 1e-5
+
     def test_resize_masks_binary_preserved(self, square_image_entity: InstanceSegmentationSample) -> None:
         """Test that mask binary values are preserved after resize."""
         resize = Resize(size=(64, 64), resize_targets=True, keep_aspect_ratio=True)
@@ -274,7 +307,7 @@ class TestResize:
         assert len(result.bboxes) == 0
 
     def test_resize_empty_masks(self) -> None:
-        """Test resize with empty masks."""
+        """Test resize with empty masks preserves spatial dimensions matching the image."""
         img_size = (100, 100)
         entity = InstanceSegmentationSample(
             image=tv_tensors.Image(torch.randint(0, 256, (3, *img_size), dtype=torch.uint8)),
@@ -293,6 +326,30 @@ class TestResize:
 
         assert result.image.shape[-2:] == (64, 64)
         assert result.masks.shape[0] == 0
+        # Spatial dimensions of empty masks must match the resized/padded image
+        assert result.masks.shape[-2:] == result.image.shape[-2:]
+
+    def test_resize_empty_masks_non_square(self) -> None:
+        """Test resize empty masks with non-square image (padding required)."""
+        img_size = (100, 200)  # wide image
+        entity = InstanceSegmentationSample(
+            image=tv_tensors.Image(torch.randint(0, 256, (3, *img_size), dtype=torch.uint8)),
+            dm_image_info=DmImageInfo(height=img_size[0], width=img_size[1]),
+            bboxes=tv_tensors.BoundingBoxes(  # type: ignore[call-overload]
+                torch.tensor([[10, 10, 50, 50]], dtype=torch.float32),
+                format=tv_tensors.BoundingBoxFormat.XYXY,
+                canvas_size=img_size,
+            ),
+            label=LongTensor([0]),
+            masks=tv_tensors.Mask(torch.empty((0, *img_size), dtype=torch.uint8)),
+        )
+        resize = Resize(size=(128, 128), keep_aspect_ratio=True)
+
+        result = resize(entity)
+
+        assert result.image.shape[-2:] == (128, 128)
+        assert result.masks.shape[0] == 0
+        assert result.masks.shape[-2:] == result.image.shape[-2:]
 
     def test_resize_single_int_size(self) -> None:
         """Test that single int size is converted to tuple."""

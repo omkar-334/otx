@@ -39,7 +39,14 @@ describe('SinkMenu', () => {
             server.use(
                 http.patch('/api/projects/{project_id}/pipeline', () => {
                     pipelinePatchSpy();
-                    return HttpResponse.json({}, { status: 200 });
+                    return HttpResponse.json(
+                        {
+                            project_id: '',
+                            status: 'idle',
+                            device: 'images_folder',
+                        },
+                        { status: 200 }
+                    );
                 }),
                 http.delete('/api/sinks/{sink_id}', () => HttpResponse.json(null, { status }))
             );
@@ -71,7 +78,18 @@ describe('SinkMenu', () => {
     describe('connect', () => {
         const name = 'test-name';
         const configRequests = (status = 200) => {
-            server.use(http.patch('/api/projects/{project_id}/pipeline', () => HttpResponse.json({}, { status })));
+            server.use(
+                http.patch('/api/projects/{project_id}/pipeline', () =>
+                    HttpResponse.json(
+                        {
+                            project_id: '',
+                            status: 'idle',
+                            device: 'images_folder',
+                        },
+                        { status }
+                    )
+                )
+            );
         };
 
         it('success', async () => {
@@ -98,12 +116,56 @@ describe('SinkMenu', () => {
             );
         });
 
-        it('disabled when sink is connected', async () => {
+        it('shows connect when sink is disconnected', async () => {
+            renderApp({ name, isConnected: false });
+
+            await userEvent.click(screen.getByRole('button', { name: /sink menu/i }));
+
+            expect(screen.getByRole('menuitem', { name: /Connect/i })).toBeVisible();
+        });
+    });
+
+    describe('disconnect', () => {
+        const name = 'test-name';
+
+        it('successfully disconnects', async () => {
+            const pipelinePatchSpy = vi.fn();
+
+            server.use(
+                http.patch('/api/projects/{project_id}/pipeline', async ({ request }) => {
+                    const body = await request.json();
+
+                    pipelinePatchSpy(body);
+
+                    return HttpResponse.json(
+                        {
+                            project_id: '',
+                            status: 'idle',
+                            device: 'images_folder',
+                        },
+                        { status: 200 }
+                    );
+                })
+            );
+
+            renderApp({ name, isConnected: true });
+
+            await userEvent.click(screen.getByRole('button', { name: /sink menu/i }));
+            await userEvent.click(screen.getByRole('menuitem', { name: /Disconnect/i }));
+
+            expect(await screen.findByLabelText('toast')).toHaveTextContent(`Successfully disconnected from "${name}"`);
+
+            expect(pipelinePatchSpy).toHaveBeenCalledWith({
+                sink_id: null,
+            });
+        });
+
+        it('shows disconnect when sink is connected', async () => {
             renderApp({ name: 'test-name', isConnected: true });
 
             await userEvent.click(screen.getByRole('button', { name: /sink menu/i }));
 
-            expect(screen.getByRole('menuitem', { name: /Connect/i })).toHaveAttribute('aria-disabled', 'true');
+            expect(screen.getByRole('menuitem', { name: /Disconnect/i })).toBeVisible();
         });
     });
 });

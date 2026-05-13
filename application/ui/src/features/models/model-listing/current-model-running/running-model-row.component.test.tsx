@@ -1,15 +1,22 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { getMockedDatasetRevision } from 'mocks/mock-dataset-revision';
+import { getMockedJob } from 'mocks/mock-job';
 import { getMockedModel, getMockedModelArchitecture } from 'mocks/mock-model';
 import { HttpResponse } from 'msw';
-import { render } from 'test-utils/render';
+import { render, renderHook } from 'test-utils/render';
 
-import { getMockedJob } from '../../../../../mocks/mock-job';
 import { http } from '../../../../api/utils';
+import { useGetCurrentRunningJobs, useStreamJobStatus } from '../../../../hooks/api/jobs/jobs.hook';
 import { server } from '../../../../msw-node-setup';
+import {
+    getLastEventSource,
+    MockEventSourceConstructor,
+    resetMockEventSource,
+    simulateSSEMessage,
+} from '../../../../test-utils/mock-event-source';
 import { RunningModelRow } from './running-model-row.component';
 
 describe('RunningModelRow', () => {
@@ -36,6 +43,7 @@ describe('RunningModelRow', () => {
     });
 
     beforeEach(() => {
+        resetMockEventSource();
         server.use(
             http.get('/api/projects/{project_id}/models/{model_id}', () => {
                 return HttpResponse.json(mockModel);
@@ -86,6 +94,7 @@ describe('RunningModelRow', () => {
         expect(await screen.findByText('My Detection Model')).toBeVisible();
         expect(screen.getByText('Running...')).toBeVisible();
         expect(screen.getByText(/Started: 19 Jan 2026/i)).toBeVisible();
+        expect(screen.getByText('Device: CPU')).toBeVisible();
 
         expect(screen.getByText(new RegExp(modelArchitecture.name))).toBeVisible();
         expect(screen.queryByText(datasetRevision.name)).not.toBeInTheDocument();
@@ -137,6 +146,7 @@ describe('RunningModelRow', () => {
         expect(screen.getByText('Running')).toBeVisible();
         expect(screen.getByText('Running...')).toBeVisible();
         expect(screen.getByText(/Started: 19 Jan 2026/i)).toBeVisible();
+        expect(screen.getByText('Device: CPU')).toBeVisible();
 
         expect(screen.queryByText(new RegExp(modelArchitecture.name))).not.toBeInTheDocument();
 
@@ -182,7 +192,7 @@ describe('RunningModelRow', () => {
             />
         );
 
-        const cancelButton = await screen.findByRole('button', { name: /cancel running job/i });
+        const cancelButton = await screen.findByRole('button', { name: /cancel job/i });
         expect(cancelButton).toBeVisible();
         expect(cancelButton).toBeEnabled();
     });
@@ -216,7 +226,92 @@ describe('RunningModelRow', () => {
             />
         );
 
-        const cancelButton = await screen.findByRole('button', { name: /cancel running job/i });
+        const cancelButton = await screen.findByRole('button', { name: /cancel job/i });
         expect(cancelButton).toBeDisabled();
+    });
+
+    describe('useStreamJobStatus', () => {
+        const job = getMockedJob({
+            metadata: {
+                project: { id: '123' },
+                model: {
+                    id: 'model-123',
+                    architecture: 'Custom_Object_Detection_Gen3_ATSS',
+                    parent_revision_id: null,
+                    dataset_revision_id: 'dataset-123',
+                },
+                device: {
+                    type: 'cpu',
+                    name: 'CPU',
+                },
+            },
+            status: 'RUNNING',
+        });
+
+        beforeEach(() => {
+            resetMockEventSource();
+        });
+
+        it('subscribes to SSE when the component mounts with a running job', async () => {
+            render(
+                <RunningModelRow
+                    job={job}
+                    datasetRevisions={[]}
+                    groupBy={'dataset'}
+                    modelArchitectures={[modelArchitecture]}
+                />
+            );
+
+            await waitFor(() => {
+                expect(MockEventSourceConstructor).toHaveBeenCalled();
+                expect(getLastEventSource().url).toContain(`/api/jobs/${job.job_id}/status`);
+            });
+        });
+
+        it('updates the React Query cache when an SSE message arrives', async () => {
+            server.use(http.get('/api/jobs', () => HttpResponse.json([job])));
+
+            const { result: jobsResult } = renderHook(() => {
+                useStreamJobStatus(job.job_id);
+                return useGetCurrentRunningJobs();
+            });
+
+            await waitFor(() => {
+                expect(jobsResult.current).toBeDefined();
+            });
+
+            const es = getLastEventSource();
+            const updatedJob = { ...job, progress: 50, message: 'Epoch 5/10' };
+
+            act(() => {
+                simulateSSEMessage(es, updatedJob);
+            });
+
+            await waitFor(() => {
+                expect(jobsResult.current?.[0].progress).toBe(50);
+                expect(jobsResult.current?.[0].message).toBe('Epoch 5/10');
+            });
+        });
+
+        it('closes the SSE connection when a terminal status is received', async () => {
+            server.use(http.get('/api/jobs', () => HttpResponse.json([job])));
+
+            renderHook(() => {
+                useStreamJobStatus(job.job_id);
+            });
+
+            await waitFor(() => {
+                expect(MockEventSourceConstructor).toHaveBeenCalled();
+            });
+
+            const es = getLastEventSource();
+            const completedJob = { ...job, status: 'DONE' as const, progress: 100 };
+
+            act(() => {
+                simulateSSEMessage(es, completedJob);
+            });
+
+            expect(es.close).toHaveBeenCalled();
+        });
     });
 });

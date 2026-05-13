@@ -1,40 +1,45 @@
 // Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { FocusEvent, KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { FocusEvent, KeyboardEvent, useRef, useState } from 'react';
 
-import { ActionButton, DOMRefValue, Grid, TextField, TextFieldRef, useUnwrapDOMRef, View } from '@geti/ui';
-import { Close } from '@geti/ui/icons';
+import { ActionButton, DOMRefValue, Flex, Grid, TextField, useUnwrapDOMRef, View } from '@geti/ui';
+import { Add, Close } from '@geti/ui/icons';
 
+import { HotkeyField } from '../../../../components/label-fields/hotkey-field.component';
 import { LabelColorPicker } from '../../../../components/label-fields/label-color-picker.component';
 import { getRandomDistinctColor } from '../../label-utils';
 
 import classes from '../label-row/label-row.module.scss';
 
 type NewLabelRowProps = {
-    onSave: (name: string, color: string) => void;
+    onSave: (name: string, color: string, hotkey?: string) => void;
     onCancel: () => void;
     validateName: (name: string, excludeId?: string) => string | undefined;
+    validateHotkey: (newHotkey: string, excludeId?: string) => string | undefined;
 };
 
-export const NewLabelRow = ({ onSave, onCancel, validateName }: NewLabelRowProps) => {
+export const NewLabelRow = ({ onSave, onCancel, validateName, validateHotkey }: NewLabelRowProps) => {
     const rowRef = useRef<DOMRefValue<HTMLDivElement>>(null);
     const rowRefUnwrapped = useUnwrapDOMRef(rowRef);
-    const inputRef = useRef<TextFieldRef<HTMLInputElement>>(null);
-    const inputRefUnwrapped = useUnwrapDOMRef(inputRef);
     const [name, setName] = useState('');
+    const [hotkey, setHotkey] = useState('');
     const [color, setColor] = useState(getRandomDistinctColor);
 
-    const validationError = name.trim() === '' ? undefined : validateName(name);
+    const isEmptyName = name.trim().length === 0;
+    const validationError = isEmptyName ? undefined : validateName(name);
 
-    useEffect(() => {
-        // Focus the input when the component mounts
-        inputRefUnwrapped.current?.focus();
-    }, [inputRefUnwrapped]);
+    const canSave = (newName: string) => {
+        const trimmedName = newName.trim();
+
+        return trimmedName.length > 0 && validateName(trimmedName) === undefined;
+    };
+
+    const isCreateButtonDisabled = !canSave(name);
 
     const handleSave = () => {
-        if (name.trim() !== '' && !validationError) {
-            onSave(name.trim(), color);
+        if (canSave(name)) {
+            onSave(name.trim(), color, hotkey.trim() === '' ? undefined : hotkey.trim());
         }
     };
 
@@ -46,6 +51,10 @@ export const NewLabelRow = ({ onSave, onCancel, validateName }: NewLabelRowProps
         }
     };
 
+    const handleHotkeyChange = (newHotkey: string | null) => {
+        setHotkey(newHotkey ?? '');
+    };
+
     const handleBlur = (event: FocusEvent<HTMLInputElement>) => {
         // Check if the blur target is within the row (e.g., clicking color picker)
         const relatedTarget = event.relatedTarget as Node | null;
@@ -53,11 +62,21 @@ export const NewLabelRow = ({ onSave, onCancel, validateName }: NewLabelRowProps
             return;
         }
 
-        if (name.trim() !== '' && !validationError) {
-            onSave(name.trim(), color);
-        } else if (name.trim() === '') {
+        const trimmedName = name.trim();
+
+        if (canSave(name)) {
+            onSave(trimmedName, color);
+        } else if (trimmedName.length === 0) {
             onCancel();
         }
+    };
+
+    const handleHotkeyUpdate = () => {
+        if (validateHotkey(hotkey) !== undefined) {
+            return;
+        }
+
+        handleSave();
     };
 
     return (
@@ -73,9 +92,10 @@ export const NewLabelRow = ({ onSave, onCancel, validateName }: NewLabelRowProps
 
             <LabelColorPicker color={color} onChange={setColor} />
 
-            <View>
+            <Flex gap={'size-100'}>
                 <TextField
-                    ref={inputRef}
+                    // eslint-disable-next-line jsx-a11y/no-autofocus
+                    autoFocus
                     aria-label={'New label name'}
                     placeholder={'Label name'}
                     value={name}
@@ -86,9 +106,24 @@ export const NewLabelRow = ({ onSave, onCancel, validateName }: NewLabelRowProps
                     errorMessage={validationError}
                     validationState={validationError ? 'invalid' : undefined}
                 />
-            </View>
 
-            <View />
+                <HotkeyField
+                    hotkey={hotkey}
+                    onEnter={handleHotkeyUpdate}
+                    onHotkeyChange={handleHotkeyChange}
+                    aria-label={'New label hotkey'}
+                    errorMessage={validateHotkey(hotkey)}
+                />
+            </Flex>
+
+            <ActionButton
+                isQuiet
+                aria-label={'Create new label'}
+                onPress={handleSave}
+                isDisabled={isCreateButtonDisabled}
+            >
+                <Add />
+            </ActionButton>
 
             <ActionButton
                 aria-label='Cancel new label'

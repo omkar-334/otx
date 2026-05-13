@@ -1,54 +1,93 @@
 // Copyright (C) 2025-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { queryOptions, useQuery } from '@tanstack/react-query';
+import { queryOptions, useIsFetching, useQuery } from '@tanstack/react-query';
 import { useProjectIdentifier } from 'hooks/use-project-identifier.hook';
 
 import { fetchClient } from '../../../api/client';
-import { PredictionVideoRangePayload } from '../../../constants/shared-types';
+import { PredictionDTO, PredictionVideoRangePayload } from '../../../constants/shared-types';
+import { EMPTY_LABEL_ID } from '../../../shared/annotator/labels';
+import { getModelIdentifierPayload, SelectableModel } from '../../models/utils';
+
+const MEDIA_PREDICTIONS_QUERY_KEY_PREFIX = (projectId: string, mediaId: string) => {
+    return [projectId, 'media-predictions', mediaId];
+};
 
 export const mediaPredictionsQueryOptions = ({
     projectId,
-    modelId,
+    selectedModel,
     mediaId,
     range = null,
 }: {
     projectId: string;
-    modelId: string | undefined;
+    selectedModel: SelectableModel | undefined;
     mediaId: string;
     range?: PredictionVideoRangePayload | null;
 }) =>
     queryOptions({
-        queryKey: [projectId, 'media-predictions', mediaId, modelId, range],
+        queryKey: [
+            ...MEDIA_PREDICTIONS_QUERY_KEY_PREFIX(projectId, mediaId),
+            selectedModel?.modelId,
+            selectedModel?.modelVariantId,
+            range,
+        ],
         queryFn: async () => {
-            if (modelId === undefined) return [];
+            if (selectedModel === undefined) return [];
 
             const response = await fetchClient.POST('/api/projects/{project_id}/dataset/media/media:predict', {
                 params: { path: { project_id: projectId } },
                 body: {
+                    ...getModelIdentifierPayload(selectedModel),
                     device: 'AUTO',
-                    model_id: modelId,
                     save_predictions: false,
                     media: [{ media_id: mediaId, range }],
                 },
             });
 
             if (response.error) return [];
-            return response.data?.predictions ?? [];
+
+            const predictions = response.data?.predictions ?? [];
+
+            return predictions.map((predictionItem) => {
+                if ((predictionItem.prediction ?? []).length === 0) {
+                    return {
+                        ...predictionItem,
+                        prediction: [
+                            {
+                                shape: { type: 'full_image' },
+                                labels: [{ id: EMPTY_LABEL_ID }],
+                                confidences: [1],
+                            } satisfies PredictionDTO,
+                        ],
+                    };
+                }
+
+                return predictionItem;
+            });
         },
-        enabled: modelId !== undefined,
+        enabled: selectedModel !== undefined,
     });
 
 export const useMediaPredictions = ({
     mediaId,
-    modelId,
+    selectedModel,
     range,
 }: {
     mediaId: string;
-    modelId: string | undefined;
+    selectedModel: SelectableModel | undefined;
     range?: PredictionVideoRangePayload | null;
 }) => {
     const projectId = useProjectIdentifier();
 
-    return useQuery(mediaPredictionsQueryOptions({ projectId, modelId, mediaId, range }));
+    return useQuery(mediaPredictionsQueryOptions({ projectId, selectedModel, mediaId, range }));
+};
+
+export const useIsFetchingAnyPredictions = (mediaId: string) => {
+    const projectId = useProjectIdentifier();
+
+    const queryKey = MEDIA_PREDICTIONS_QUERY_KEY_PREFIX(projectId, mediaId);
+
+    const numberOfFetchingPredictions = useIsFetching({ queryKey });
+
+    return numberOfFetchingPredictions > 0;
 };

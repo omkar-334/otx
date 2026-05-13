@@ -10,7 +10,6 @@
 import sys
 
 if getattr(sys, "frozen", False) and __name__ == "__main__":
-    print("Calling multiprocessing.freeze_support()")
     import multiprocessing
 
     # Pyinstaller requires this method to be called in "frozen" applications if multiprocessing module is
@@ -37,6 +36,7 @@ from app.api.routers import (
     dataset_revisions,
     datasets,
     jobs,
+    license,
     media,
     model_architectures,
     models,
@@ -80,6 +80,7 @@ app.include_router(dataset_ie.router)
 app.include_router(dataset_revisions.router)
 app.include_router(datasets.router)
 app.include_router(jobs.router)
+app.include_router(license.router)
 app.include_router(media.router)
 app.include_router(model_architectures.router)
 app.include_router(models.router)

@@ -1,72 +1,102 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{
-    env,
-    process::{Child, Command},
-    sync::{Arc, Mutex},
-};
-use tauri::RunEvent;
+mod backend;
 
-/// “geti-backend.exe” on Windows, “geti-backend” elsewhere.
-fn backend_filename() -> &'static str {
-    if cfg!(windows) {
-        "geti-backend.exe"
-    } else {
-        "geti-backend"
-    }
-}
+use std::process::Child;
+use std::sync::{Arc, Mutex};
 
-/// Spawns the side-car in the same folder as this executable.
-fn spawn_backend() -> std::io::Result<Child> {
-    // Locate the Tauri executable, then its parent folder
-    let exe_path = env::current_exe().expect("failed to get current exe path");
-    let exe_dir = exe_path
-        .parent()
-        .expect("failed to get parent directory of exe");
+use tauri::{Manager, RunEvent, WindowEvent};
 
-    // Build the full path to geti-backend.exe
-    // Tauri build will have renamed the suffixed file to plain name next to the exe.
-    let backend_path = exe_dir.join(backend_filename());
+use crate::backend::spawn_backend;
 
-    log::info!("▶ Looking for backend side-car at {:?}", backend_path);
-    let mut command = Command::new(&backend_path);
-    command.env("CORS_ORIGINS", "http://tauri.localhost");
-    #[cfg(all(windows, not(debug_assertions)))]
+/// Kill a process and all its descendants.
+///
+/// - **Windows**: `taskkill /F /T /PID` terminates the entire process tree.
+/// - **Unix**: sends `SIGKILL` to the process group (`kill -- -<pid>`).  The
+///   backend inherits the Tauri-created process group so all its multiprocessing
+///   workers are included.
+fn kill_process_tree(child: &mut Child) {
+    let pid = child.id();
+
+    #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        use std::process::Command;
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output();
     }
-    let child = command.spawn()?;
 
-    log::info!("▶ Spawned backend: {:?}", backend_path);
-    Ok(child)
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        // kill -- -PID sends the signal to the whole process group.
+        let _ = Command::new("kill")
+            .args(["-9", "--", &format!("-{pid}")])
+            .output();
+    }
+
+    // Reap the main child so we don't leave a zombie.
+    let _ = child.wait();
 }
 
 fn main() {
-    // Shared handle so we can kill it on exit
+    // Shared handle so we can kill the backend on exit.
     let child_handle = Arc::new(Mutex::new(None));
 
-    // Build the app
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_log::Builder::default().build())
         .setup({
             let child_handle = child_handle.clone();
-            move |_app_handle| {
-                let child = spawn_backend().expect("Failed to spawn python backend");
+            move |app| {
+                let child = spawn_backend(app.handle()).expect("Failed to spawn python backend");
                 *child_handle.lock().unwrap() = Some(child);
                 Ok(())
+            }
+        })
+        // Geti is a single-window utility app, so closing the main window
+        // should quit the whole process (default macOS behaviour is to keep
+        // the app alive in the dock, which leaks the backend side-car).
+        .on_window_event({
+            let child_handle = child_handle.clone();
+            move |window, event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    // Prevent the default close so we can shut down gracefully.
+                    // Destroying the window first lets the WebView2 / Chromium
+                    // widget tear down cleanly before the process exits,
+                    // avoiding the "Failed to unregister class
+                    // Chrome_WidgetWin_0" error on Windows.
+                    api.prevent_close();
+
+                    // Kill the backend *before* exiting so worker processes
+                    // cannot outlive the UI — even if RunEvent::Exit is
+                    // short-circuited by exit(0).
+                    if let Some(mut child) = child_handle.lock().unwrap().take() {
+                        kill_process_tree(&mut child);
+                        log::info!("⛔ Backend terminated");
+                    }
+
+                    let handle = window.app_handle().clone();
+                    if let Err(e) = window.destroy() {
+                        log::warn!("Failed to destroy window during shutdown: {e}");
+                    }
+                    handle.exit(0);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![])
         .build(tauri::generate_context!())
         .expect("error building Tauri");
 
-    // Run and on Exit make sure to kill the backend
+    // Belt-and-suspenders: also handle RunEvent::Exit for cases where the app
+    // exits without going through the CloseRequested path (e.g. Cmd+Q on
+    // macOS, or programmatic shutdown).
     let exit_handle = child_handle.clone();
     app.run(move |_app_handle, event| {
         if let RunEvent::Exit = event {
             if let Some(mut child) = exit_handle.lock().unwrap().take() {
-                let _ = child.kill();
+                kill_process_tree(&mut child);
                 log::info!("⛔ Backend terminated");
             }
         }

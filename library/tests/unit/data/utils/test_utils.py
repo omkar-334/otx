@@ -1,14 +1,14 @@
 # Copyright (C) 2024 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Tests for utils for OTX data module."""
+"""Tests for utils for getitune data module."""
 
 from __future__ import annotations
 
 import pytest
 
-from otx.data.utils import utils as target_file
-from otx.data.utils.utils import get_adaptive_num_workers
+from getitune.data.utils import utils as target_file
+from getitune.data.utils.utils import get_adaptive_num_workers
 
 
 @pytest.mark.parametrize("num_dataloader", [1, 2, 4])

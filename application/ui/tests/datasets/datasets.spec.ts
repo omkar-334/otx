@@ -55,9 +55,9 @@ test.describe('Dataset', () => {
 
     test('list items', async ({ datasetPage }) => {
         await datasetPage.goto();
-        const loadedItems = 40;
+        const loadedItems = 20;
 
-        await expect(datasetPage.getImagesCountText(loadedItems)).toBeVisible();
+        await expect(datasetPage.getImagesCountText(totalElements)).toBeVisible();
 
         await datasetPage.selectAll();
 
@@ -69,7 +69,7 @@ test.describe('Dataset', () => {
 
         await datasetPage.goto();
 
-        await expect(datasetPage.getImagesCountText(40)).toBeVisible();
+        await expect(datasetPage.getImagesCountText(totalElements)).toBeVisible();
 
         const options = datasetPage.getMediaGridOptions();
 
@@ -83,7 +83,7 @@ test.describe('Dataset', () => {
     test('loads additional items when scrolling to the end of the container', async ({ datasetPage }) => {
         await datasetPage.goto();
 
-        await expect(datasetPage.getImagesCountText(40)).toBeVisible();
+        await expect(datasetPage.getImagesCountText(totalElements)).toBeVisible();
 
         await datasetPage.getMediaGrid().press('End');
 
@@ -190,6 +190,7 @@ test.describe('Dataset', () => {
                         return HttpResponse.json({
                             annotations: payload.annotations,
                             user_reviewed: true,
+                            subset: 'training',
                         });
                     }
                 )
@@ -382,6 +383,7 @@ test.describe('Dataset', () => {
                         return HttpResponse.json({
                             annotations: payload.annotations,
                             user_reviewed: true,
+                            subset: 'training',
                         });
                     }
                 )

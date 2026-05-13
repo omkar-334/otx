@@ -1,13 +1,13 @@
 // Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { Button, Flex, Text, View } from '@geti/ui';
+import { Button, Divider, Flex, Text, toast, View } from '@geti/ui';
 import { useDeleteStagedDataset, useStagedDataset } from 'hooks/api/staged-dataset.hook';
 import { isNil } from 'lodash-es';
 
 import { API_BASE_URL } from '../../../../../../api/client';
 import { ExportDatasetJob } from '../../../../../../constants/shared-types';
-import { useExportDataset } from '../../../../../../hooks/localStorage/use-export-dataset.hook';
+import { useExportDataset } from '../../../../../../hooks/storage/use-export-dataset.hook';
 import { downloadFile } from '../../../../../../shared/util';
 import { ExportJobDetails } from '../export-details/export-details.component';
 
@@ -25,14 +25,22 @@ export const ExportCompletedJob = ({ job, datasetName }: ExportCompletedJobProps
         deleteEntry: () => removeLsExportId(job.job_id),
     });
 
+    const hasInvalidStagedDataset = isNil(job.metadata.dataset_id);
+    const message = hasInvalidStagedDataset ? job.message : 'Dataset is ready for download';
+
     const handleClose = () => {
-        removeStagedDatasetMutation.mutate();
+        if (hasInvalidStagedDataset) {
+            removeLsExportId(job.job_id);
+        } else {
+            removeStagedDatasetMutation.mutate();
+        }
     };
 
     const handleDownload = () => {
         const url = `${API_BASE_URL}/api/staged_datasets/${job.metadata.dataset_id}/zip`;
 
         downloadFile(url, `dataset_${job.metadata.dataset_id}.zip`);
+        toast({ type: 'info', message: 'Dataset download started' });
     };
 
     return (
@@ -57,9 +65,9 @@ export const ExportCompletedJob = ({ job, datasetName }: ExportCompletedJobProps
                         onPress={handleDownload}
                         isPending={stageDatasetResponse.isFetching}
                         isDisabled={
+                            hasInvalidStagedDataset ||
                             stageDatasetResponse.isFetching ||
-                            removeStagedDatasetMutation.isPending ||
-                            isNil(job.metadata.dataset_id)
+                            removeStagedDatasetMutation.isPending
                         }
                     >
                         Download
@@ -67,7 +75,9 @@ export const ExportCompletedJob = ({ job, datasetName }: ExportCompletedJobProps
                 </Flex>
             </Flex>
 
-            <Text>Dataset is ready to download</Text>
+            <Divider size={'S'} marginY={'size-150'} />
+
+            <Text>{message}</Text>
         </View>
     );
 };

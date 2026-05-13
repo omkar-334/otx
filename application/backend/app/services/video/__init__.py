@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from .video_service import extract_video_frame, get_video_metadata
+from .video_service import CacheConfig, VideoService
 
 __all__ = [
-    "extract_video_frame",
-    "get_video_metadata",
+    "CacheConfig",
+    "VideoService",
 ]

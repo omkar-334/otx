@@ -1,6 +1,8 @@
 // Copyright (C) 2025-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+import { useRef } from 'react';
+
 import { useQueryClient } from '@tanstack/react-query';
 import { useProjectIdentifier } from 'hooks/use-project-identifier.hook';
 
@@ -12,12 +14,16 @@ import { isQuantizeJob, isTrainJob } from '../util';
 
 const TERMINAL_STATUSES: string[] = ['DONE', 'FAILED', 'CANCELLED'];
 
-const useStreamJobStatus = (jobId: string | undefined) => {
+export const useStreamJobStatus = (jobId: string | undefined) => {
     const queryClient = useQueryClient();
     const projectId = useProjectIdentifier();
+    const modelIdRef = useRef<string | null>(null);
 
     const { close } = useSSE<Job>(jobId ? `/api/jobs/${jobId}/status` : undefined, {
         onMessage: (updatedJob) => {
+            if (isQuantizeJob(updatedJob)) {
+                modelIdRef.current = updatedJob.metadata.model.id;
+            }
             // Update the job in the cache optimistically to reflect real-time progress
             queryClient.setQueryData<Job[]>(['get', '/api/jobs'], (prevJobs) => {
                 if (!prevJobs) {
@@ -40,6 +46,23 @@ const useStreamJobStatus = (jobId: string | undefined) => {
                     { params: { path: { project_id: projectId } } },
                 ]),
             });
+
+            modelIdRef.current !== null &&
+                queryClient.invalidateQueries({
+                    queryKey: getQueryKey([
+                        'get',
+                        '/api/projects/{project_id}/models/{model_id}',
+                        {
+                            params: {
+                                path: {
+                                    project_id: projectId,
+                                    model_id: modelIdRef.current,
+                                },
+                            },
+                        },
+                    ]),
+                });
+            modelIdRef.current = null;
         },
     });
 };
@@ -56,11 +79,11 @@ const useListJobs = () => {
     return $api.useQuery('get', '/api/jobs');
 };
 
-export const useGetCurrentRunningJob = () => {
+export const useGetCurrentRunningJobs = () => {
     const projectId = useProjectIdentifier();
     const activeJobs = useListJobs();
 
-    const activeRunningJob = activeJobs.data?.find((job) => {
+    const activeRunningJobs = activeJobs.data?.filter((job) => {
         const isActive = job.status === 'RUNNING' || job.status === 'PENDING';
 
         if (isActive && (isTrainJob(job) || isQuantizeJob(job))) {
@@ -70,9 +93,7 @@ export const useGetCurrentRunningJob = () => {
         return false;
     });
 
-    useStreamJobStatus(activeRunningJob?.job_id);
-
-    return activeRunningJob;
+    return activeRunningJobs;
 };
 
 export const useCancelJob = () => {

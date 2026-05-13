@@ -9,6 +9,7 @@ import { clsx } from 'clsx';
 
 import type { AnnotatorMode } from '../../../../shared/annotator/annotator-mode';
 import { Toolbar } from '../../../dataset/media-preview/toolbar-container/toolbar-container.component';
+import { PREDICTION_CHUNK_SIZE, usePrefetchVideoFramesPredictions } from '../api/use-video-frames-predictions';
 import { useVideoPlayer } from '../video-player-provider.component';
 import { FrameStep } from './frame-step/frame-step.component';
 import { PlaybackSpeedSlider } from './playback-rate.component';
@@ -27,6 +28,13 @@ export const VideoToolbar = ({ mode }: VideoToolbarProps) => {
     const { videoFrame, step, changeStep, videoControls } = useVideoPlayer();
     const [isExpanded, setIsExpanded] = useState(false);
 
+    // Prefetch predictions for the video segments that are displayed under video timeline
+    usePrefetchVideoFramesPredictions({
+        frameNumber: videoFrame.frame_number,
+        frameSkip: step,
+        chunkSize: PREDICTION_CHUNK_SIZE,
+    });
+
     return (
         <Toolbar.Container>
             <Toolbar.Section>
@@ -35,8 +43,8 @@ export const VideoToolbar = ({ mode }: VideoToolbarProps) => {
                         <Flex alignItems={'center'} gap={'size-200'}>
                             {isExpanded && <Text>Frames</Text>}
 
-                            <VideoControls />
-                            <VideoDuration />
+                            <VideoControls mode={mode} />
+                            <VideoDuration videoFrame={videoFrame} />
 
                             {isExpanded && (
                                 <Flex alignItems={'center'} gap={'size-100'}>

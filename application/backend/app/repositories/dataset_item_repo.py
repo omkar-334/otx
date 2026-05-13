@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from collections import Counter
 from datetime import UTC, datetime
-from typing import Any, NamedTuple, cast
+from typing import Any, cast
 
 from sqlalchemy import CursorResult, Select, delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
@@ -12,12 +12,6 @@ from app.db.schema import DatasetItemDB, DatasetItemLabelDB, MediaDB
 from app.models import DatasetItemSubset
 
 from .filters import _apply_annotation_status_filter, _apply_subset_filter
-
-
-class UpdateDatasetItemAnnotation(NamedTuple):
-    annotation_data: list
-    user_reviewed: bool
-    prediction_model_id: str | None
 
 
 class DatasetItemRepository:
@@ -126,14 +120,9 @@ class DatasetItemRepository:
 
     def set_annotation_data(
         self, obj_id: str, annotation_data: list, user_reviewed: bool, prediction_model_id: str | None
-    ) -> UpdateDatasetItemAnnotation | None:
+    ) -> bool:
         stmt = (
             update(DatasetItemDB)
-            .returning(
-                DatasetItemDB.annotation_data,
-                DatasetItemDB.user_reviewed,
-                DatasetItemDB.prediction_model_id,
-            )
             .where(
                 DatasetItemDB.project_id == self.project_id,
                 DatasetItemDB.id == obj_id,
@@ -145,9 +134,8 @@ class DatasetItemRepository:
                 updated_at=datetime.now(UTC),
             )
         )
-        result = self.db.execute(stmt)
-        row = result.mappings().first()
-        return UpdateDatasetItemAnnotation(**row) if row else None  # pyrefly: ignore[missing-argument,bad-unpacking]
+        result = cast(CursorResult, self.db.execute(stmt))
+        return result.rowcount > 0
 
     def delete_annotation_data(self, obj_id: str) -> bool:
         stmt = (
@@ -291,33 +279,29 @@ class DatasetItemRepository:
         annotated_video_count = self.db.execute(annotated_video_stmt).scalar()
         annotated_counts["annotated_videos"] = annotated_video_count or 0
 
-        # Total instances:
+        # Total instances and instances_per_label
         annotated_dataset_items_stmt = select(DatasetItemDB.annotation_data).where(
             DatasetItemDB.project_id == self.project_id,
             DatasetItemDB.annotation_data.isnot(None),
             DatasetItemDB.user_reviewed,
         )
-        annotated_counts["instances"] = sum(
-            len(item.annotation_data)
-            for item in self.db.execute(annotated_dataset_items_stmt)
-            if item.annotation_data is not None
-        )
+        total_instances = 0
+        labels_counts: Counter[str] = Counter()
+        no_object_count = 0
+        for item in self.db.execute(annotated_dataset_items_stmt):
+            if not item.annotation_data:
+                no_object_count += 1
+            else:
+                total_instances += len(item.annotation_data)
+                for annotation in item.annotation_data:
+                    for label in annotation["labels"]:
+                        labels_counts[label["id"]] += 1
 
-        # instances_per_label
-        annotated_dataset_items_stmt = select(DatasetItemDB.annotation_data).where(
-            DatasetItemDB.project_id == self.project_id, DatasetItemDB.annotation_data.isnot(None)
-        )
-
-        labels_counts = Counter(
-            label["id"]
-            for item in self.db.execute(annotated_dataset_items_stmt)
-            if item.annotation_data is not None
-            for annotation in item.annotation_data
-            for label in annotation["labels"]
-        )
+        annotated_counts["instances"] = total_instances
         annotated_counts["instances_per_label"] = [
             {"label_id": label_id, "instances": count} for label_id, count in labels_counts.items()
         ]
+        annotated_counts["instances_per_label"].append({"label_id": None, "instances": no_object_count})  # type: ignore[dict-item]
 
         statistics.update(annotated_counts)
 

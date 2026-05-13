@@ -1,14 +1,14 @@
 // Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { screen, waitFor } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getMockedProject } from 'mocks/mock-project';
 import { HttpResponse } from 'msw';
 import { render } from 'test-utils/render';
 
 import { http } from '../../../../../api/utils';
-import { AnnotationType, TaskType } from '../../../../../constants/shared-types';
+import { AnnotationType, DatasetFormat, TaskType } from '../../../../../constants/shared-types';
 import { server } from '../../../../../msw-node-setup';
 import { ImportTaskSelection } from './import-task-selection.component';
 
@@ -19,7 +19,7 @@ const getImportEntrySpy = vi.fn();
 const updateImportEntrySpy = vi.fn();
 const setCurrentStepSpy = vi.fn();
 
-vi.mock('hooks/localStorage/use-import-dataset-as-new-project.hook', () => ({
+vi.mock('hooks/storage/use-import-dataset-as-new-project.hook', () => ({
     useImportDatasetAsNewProject: () => ({
         getAllImportEntries: vi.fn(),
         appendImportEntry: vi.fn(),
@@ -41,10 +41,18 @@ describe('ImportTaskSelection', () => {
         vi.clearAllMocks();
     });
 
-    const renderApp = (annotationType: AnnotationType, taskType: TaskType = 'classification') => {
+    const renderApp = ({
+        format = 'geti',
+        taskType,
+        annotationType,
+    }: {
+        format: DatasetFormat;
+        taskType?: TaskType;
+        annotationType: AnnotationType;
+    }) => {
         getImportEntrySpy.mockReturnValue({
-            project: { name: 'Project #2', task_type: taskType },
             step: 'taskTypeSelection',
+            project: { name: 'Project #2', task_type: taskType },
         });
 
         server.use(
@@ -52,7 +60,7 @@ describe('ImportTaskSelection', () => {
             http.get('/api/staged_datasets/{staged_dataset_id}', () => {
                 return HttpResponse.json({
                     id: mockedStagedDatasetId,
-                    format: 'geti',
+                    format,
                     size: 123,
                     metadata: {
                         labels: [],
@@ -74,41 +82,74 @@ describe('ImportTaskSelection', () => {
         render(<ImportTaskSelection stagedDatasetId={mockedStagedDatasetId} />);
     };
 
-    it('shows Detection as recommended task for bounding box annotations', async () => {
-        renderApp('bounding_box');
+    it('shows all three task type options for bounding_box annotations', async () => {
+        renderApp({ format: 'geti', taskType: 'detection', annotationType: 'bounding_box' });
 
-        await waitFor(() => {
-            const projectNameInput = screen.getByLabelText('Project name') as HTMLInputElement;
-            expect(projectNameInput.value).toBe('Project #2');
-        });
+        const listButton = await screen.findByRole('button', { name: /Task type/i });
+        expect(listButton).toBeVisible();
 
-        expect(await screen.findByText('Detection (Recommended)')).toBeVisible();
+        await userEvent.click(listButton);
+        const container = await screen.findByRole('listbox');
+
+        expect(within(container).getByText('Object detection (Recommended)')).toBeVisible();
+        expect(within(container).getByText('Classification')).toBeVisible();
+        expect(within(container).getByText('Instance segmentation')).toBeVisible();
     });
 
-    it('shows Instance segmentation as recommended task for polygon annotations', async () => {
-        renderApp('polygon');
+    it('shows all three task type options for polygon annotations', async () => {
+        renderApp({ format: 'geti', taskType: 'instance_segmentation', annotationType: 'polygon' });
 
-        await waitFor(() => {
-            const projectNameInput = screen.getByLabelText('Project name') as HTMLInputElement;
-            expect(projectNameInput.value).toBe('Project #2');
-        });
+        const listButton = await screen.findByRole('button', { name: /Task type/i });
+        expect(listButton).toBeVisible();
 
-        expect(await screen.findByText('Instance segmentation (Recommended)')).toBeVisible();
+        await userEvent.click(listButton);
+        const container = await screen.findByRole('listbox');
+
+        expect(within(container).getByText('Object detection')).toBeVisible();
+        expect(within(container).getByText('Classification')).toBeVisible();
+        expect(within(container).getByText('Instance segmentation (Recommended)')).toBeVisible();
     });
 
-    it('shows Classification as recommended task for label annotations', async () => {
-        renderApp('label', 'instance_segmentation');
+    it('shows only Classification option for label annotations', async () => {
+        renderApp({ format: 'geti', taskType: 'classification', annotationType: 'label' });
 
-        await waitFor(() => {
-            const projectNameInput = screen.getByLabelText('Project name') as HTMLInputElement;
-            expect(projectNameInput.value).toBe('Project #2');
-        });
+        const listButton = await screen.findByRole('button', { name: /Task type/i });
+        expect(listButton).toBeVisible();
 
-        expect(await screen.findByText('Classification (Recommended)')).toBeVisible();
+        await userEvent.click(listButton);
+        const container = await screen.findByRole('listbox');
+
+        expect(within(container).getByText('Classification (Recommended)')).toBeVisible();
+        expect(within(container).queryByText('Object detection')).not.toBeInTheDocument();
+        expect(within(container).queryByText('Instance segmentation')).not.toBeInTheDocument();
+    });
+
+    it('does not show recommended task types for non-geti format', async () => {
+        renderApp({ format: 'coco', annotationType: 'bounding_box' });
+
+        expect(await screen.findByRole('button', { name: /Task type/i })).toHaveTextContent(/Select task/i);
+    });
+
+    it('does not show recommended message when there is no recommended task type', async () => {
+        renderApp({ format: 'coco', annotationType: 'bounding_box' });
+
+        await screen.findByRole('button', { name: /Task type/i });
+
+        expect(
+            screen.queryByText(/The recommended choice is based on the type of the annotations/i)
+        ).not.toBeInTheDocument();
+    });
+
+    it('shows recommended message when there is a recommended task type', async () => {
+        renderApp({ format: 'geti', taskType: 'detection', annotationType: 'bounding_box' });
+
+        expect(
+            await screen.findByText(/The recommended choice is based on the type of the annotations/i)
+        ).toBeVisible();
     });
 
     it('shows an error when the project name already exists', async () => {
-        renderApp('bounding_box');
+        renderApp({ format: 'geti', taskType: 'detection', annotationType: 'bounding_box' });
 
         const projectNameInput = await screen.findByLabelText('Project name');
 

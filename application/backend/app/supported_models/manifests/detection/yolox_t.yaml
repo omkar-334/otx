@@ -2,7 +2,8 @@ id: object-detection-yolox-tiny
 name: YOLOX-Tiny
 
 pretrained_weights:
-  url: https://storage.openvinotoolkit.org/repositories/openvino_training_extensions/models/object_detection/v2/yolox_tiny_8x8.pth
+  url: https://storage.geti.intel.com/weights/yolox_tiny_8x8.pth
+  mirror_url: https://storage.openvinotoolkit.org/repositories/openvino_training_extensions/models/object_detection/v2/yolox_tiny_8x8.pth
   sha_sum: 4ff3b67e005a6356a5794f5fbc42b133e077aa30ddcb0449b2153cfd953a0030
 
 description: "YOLOX is a high-performance, anchor-free object detection algorithm that builds on the YOLO series with modern improvements. It features a decoupled head for separate classification and regression tasks, strong data augmentation techniques, and advanced label assignment strategies. YOLOX achieves a great balance between speed and accuracy, making it suitable for real-time applications across various domains."
@@ -40,6 +41,7 @@ hyperparameters:
       mixup:
         enable: false
         probability: 0.5
+        alpha: 1.5
       iou_random_crop:
         enable: false
         probability: 1.0
@@ -56,10 +58,10 @@ hyperparameters:
         max_rotate_degree: 10.0
         max_translate_ratio: 0.1
         scaling_ratio_range:
-          - 0.1
-          - 2.0
+          - 1.0
+          - 1.0
         max_shear_degree: 2.0
-        probability: 0.5
+        probability: 0.7
       gaussian_blur:
         enable: false
         kernel_size: 5

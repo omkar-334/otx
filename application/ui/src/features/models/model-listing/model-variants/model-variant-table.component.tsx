@@ -1,12 +1,29 @@
 // Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { ActionButton, Cell, Column, Flex, Row, TableBody, TableHeader, TableView, toast } from '@geti/ui';
+import {
+    ActionButton,
+    Cell,
+    Column,
+    Content,
+    ContextualHelp,
+    Flex,
+    Heading,
+    Row,
+    TableBody,
+    TableHeader,
+    TableView,
+    Text,
+    toast,
+} from '@geti/ui';
 import { DownloadIcon } from '@geti/ui/icons';
+import { useProjectIdentifier } from 'hooks/use-project-identifier.hook';
+import { get } from 'lodash-es';
+import { useNumberFormatter } from 'react-aria';
 
-import type { Model, ModelFormat } from '../../../../constants/shared-types';
-import { formatBytes } from '../../../../shared/util';
-import { useDownloadModel } from '../../hooks/api/use-download-model.hook';
+import { API_BASE_URL } from '../../../../api/client';
+import type { Model, ModelFormat, ModelVariant } from '../../../../constants/shared-types';
+import { downloadFile, formatBytes } from '../../../../shared/util';
 import {
     getBaselineVariant,
     getFp32PytorchVariant,
@@ -14,14 +31,64 @@ import {
     getPrimaryTestingMetricValue,
     getVariantPerformanceValue,
 } from '../utils/variant-metrics';
+import { ModelVariantActions } from './model-variant-actions.component';
 import { ValueWithDelta } from './model-variant-delta.component';
 
 type ModelVariantTableProps = {
     model: Model;
     format: ModelFormat;
 };
+
+type ModelVariantPrecisionRendererProps = {
+    variant: ModelVariant;
+};
+
+const ModelVariantPrecisionRenderer = ({ variant }: ModelVariantPrecisionRendererProps) => {
+    const numberFormatter = useNumberFormatter({
+        style: 'percent',
+        maximumFractionDigits: 1,
+    });
+
+    if (variant.quantization_info == null) {
+        return <Text>{variant.precision.toUpperCase()}</Text>;
+    }
+
+    const quantizationParameters = {
+        maxDrop: get(variant.quantization_info, 'max_drop', null),
+        maxCalibrationSubsetSize: get(variant.quantization_info, 'max_calibration_subset_size', null),
+    };
+
+    const maxAccuracyDrop = quantizationParameters.maxDrop === null ? null : Number(quantizationParameters.maxDrop);
+    const calibrationDatasetSize =
+        quantizationParameters.maxCalibrationSubsetSize === null
+            ? null
+            : Number(quantizationParameters.maxCalibrationSubsetSize);
+
+    return (
+        <Flex direction={'row'} gap={'size-100'}>
+            <Text>{variant.precision.toUpperCase()}</Text>
+            {(calibrationDatasetSize || maxAccuracyDrop) && (
+                <ContextualHelp variant={'info'} placement={'top'}>
+                    <Heading>Quantized with NNCF PTQ</Heading>
+                    <Content>
+                        <Flex direction={'column'}>
+                            {maxAccuracyDrop !== null && (
+                                <Text>Max accuracy drop: {numberFormatter.format(maxAccuracyDrop)}</Text>
+                            )}
+                            {calibrationDatasetSize != null && (
+                                <Text>Calibration dataset size: {calibrationDatasetSize}</Text>
+                            )}
+                        </Flex>
+                    </Content>
+                </ContextualHelp>
+            )}
+        </Flex>
+    );
+};
+
 export const ModelVariantTable = ({ model, format }: ModelVariantTableProps) => {
-    const { downloadModel, isDownloading } = useDownloadModel(model.id);
+    const projectId = useProjectIdentifier();
+
     const allVariants = model.variants ?? [];
     const variants = allVariants.filter((variant) => variant.format === format);
     const baselineVariant = getBaselineVariant(variants);
@@ -34,8 +101,10 @@ export const ModelVariantTable = ({ model, format }: ModelVariantTableProps) => 
         : undefined;
 
     const handleDownloadModel = (modelVariantId: string) => {
-        toast({ type: 'info', message: 'Model download started...please wait.' });
-        downloadModel(modelVariantId);
+        const url = `${API_BASE_URL}/api/projects/${projectId}/models/${model.id}/variants/${modelVariantId}/binary`;
+        downloadFile(url);
+
+        toast({ type: 'info', message: 'Model download started' });
     };
 
     return (
@@ -54,8 +123,10 @@ export const ModelVariantTable = ({ model, format }: ModelVariantTableProps) => 
                     const isBaselineVariant = variant.id === baselineVariant?.id;
 
                     return (
-                        <Row key={`${variant.format}-${variant.precision}`}>
-                            <Cell>{variant.precision.toUpperCase()}</Cell>
+                        <Row key={variant.id}>
+                            <Cell>
+                                <ModelVariantPrecisionRenderer variant={variant} />
+                            </Cell>
                             <Cell>
                                 <ValueWithDelta
                                     value={variant.weights_size}
@@ -77,14 +148,18 @@ export const ModelVariantTable = ({ model, format }: ModelVariantTableProps) => 
                             </Cell>
                             <Cell>
                                 <Flex gap={'size-100'} justifyContent='end' alignItems='center'>
-                                    <ActionButton
-                                        isQuiet
-                                        aria-label={`Download model ${variant.id}`}
-                                        isDisabled={isDownloading}
-                                        onPress={() => handleDownloadModel(variant.id)}
-                                    >
-                                        <DownloadIcon />
-                                    </ActionButton>
+                                    {format !== 'openvino' && (
+                                        <ActionButton
+                                            isQuiet
+                                            aria-label={`Download model ${variant.id}`}
+                                            onPress={() => handleDownloadModel(variant.id)}
+                                        >
+                                            <DownloadIcon />
+                                        </ActionButton>
+                                    )}
+                                    {format === 'openvino' && (
+                                        <ModelVariantActions modelVariant={variant} onDownload={handleDownloadModel} />
+                                    )}
                                 </Flex>
                             </Cell>
                         </Row>

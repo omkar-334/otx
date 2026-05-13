@@ -6,13 +6,16 @@ import { useMemo } from 'react';
 import { useProjectIdentifier } from 'hooks/use-project-identifier.hook';
 
 import { $api } from '../api/client';
-import { DatasetItemAnnotationStatus, DatasetSubset, Media, MediaDTO } from '../constants/shared-types';
+import { DatasetItemAnnotationStatus, DatasetSubset, Media, MediaDTO, Pagination } from '../constants/shared-types';
 
 const DATASET_ITEMS_LIMIT = 20;
 
 interface UseGetDatasetMediaItemsOptions {
     subset?: DatasetSubset;
     annotationStatus?: DatasetItemAnnotationStatus;
+    labelIds?: string[];
+    startDate?: string;
+    endDate?: string;
 }
 
 const getMediaEntities = (items: MediaDTO[]): Media[] => {
@@ -23,6 +26,7 @@ const getMediaEntities = (items: MediaDTO[]): Media[] => {
             return {
                 duration: 0,
                 frame_count: 0,
+                annotated_frame_count: 0,
                 fps: 0,
                 frame_number: 0,
                 frame_stride: 0,
@@ -38,9 +42,12 @@ export const useGetDatasetMediaItems = (options?: UseGetDatasetMediaItemsOptions
     const project_id = useProjectIdentifier();
 
     const query: {
-        offset: number;
         limit: number;
+        offset: number;
         subset?: DatasetSubset;
+        labels?: string[];
+        end_date?: string;
+        start_date?: string;
         annotation_status?: DatasetItemAnnotationStatus;
     } = {
         offset: 0,
@@ -55,6 +62,18 @@ export const useGetDatasetMediaItems = (options?: UseGetDatasetMediaItemsOptions
         query.annotation_status = options.annotationStatus;
     }
 
+    if (options?.labelIds !== undefined) {
+        query.labels = options.labelIds;
+    }
+
+    if (options?.startDate !== undefined) {
+        query.start_date = options.startDate;
+    }
+
+    if (options?.endDate !== undefined) {
+        query.end_date = options.endDate;
+    }
+
     const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isPending } = $api.useInfiniteQuery(
         'get',
         '/api/projects/{project_id}/dataset/media',
@@ -66,11 +85,7 @@ export const useGetDatasetMediaItems = (options?: UseGetDatasetMediaItemsOptions
         },
         {
             pageParamName: 'offset',
-            getNextPageParam: ({
-                pagination,
-            }: {
-                pagination: { offset: number; limit: number; count: number; total: number };
-            }) => {
+            getNextPageParam: ({ pagination }: { pagination: Pagination }) => {
                 const total = pagination.offset + pagination.count;
 
                 if (total >= pagination.total) {
@@ -87,6 +102,7 @@ export const useGetDatasetMediaItems = (options?: UseGetDatasetMediaItemsOptions
 
         return getMediaEntities(mediaItems);
     }, [data?.pages]);
+
     const totalCount = data?.pages[0]?.pagination?.total ?? 0;
 
     return { items, fetchNextPage, hasNextPage, isFetchingNextPage, isPending, totalCount };

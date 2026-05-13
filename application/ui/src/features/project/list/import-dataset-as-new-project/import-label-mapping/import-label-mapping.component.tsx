@@ -5,7 +5,7 @@ import { useActionState } from 'react';
 
 import { Checkbox, dimensionValue, Divider, Flex, Form, Heading, View } from '@geti/ui';
 import { useStagedDataset } from 'hooks/api/staged-dataset.hook';
-import { useImportDatasetAsNewProject } from 'hooks/localStorage/use-import-dataset-as-new-project.hook';
+import { useImportDatasetAsNewProject } from 'hooks/storage/use-import-dataset-as-new-project.hook';
 import { isNil, isString } from 'lodash-es';
 
 import { $api } from '../../../../../api/client';
@@ -106,7 +106,7 @@ export const ImportLabelMapping = ({ stagedDatasetId }: LabelMappingProps) => {
                         name='labels'
                         label='Dataset labels'
                         maxHeight='size-2000'
-                        allSelectedByDefault
+                        defaultSelectedKeys={new Set(datasetLabels.map((label) => label))}
                         items={datasetLabels.map((label) => ({ id: label, name: label }))}
                     />
 

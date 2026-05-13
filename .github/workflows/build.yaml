@@ -21,7 +21,7 @@ jobs:
   # If PR or merge_group -> run only if files in specified paths changed
   check_paths:
     name: Check if workflow should run
-    runs-on: overflow
+    runs-on: ${{ github.repository_owner == 'open-edge-platform' && 'overflow' || 'ubuntu-latest' }}
     outputs:
       run_workflow: ${{ steps.check_paths.outputs.run }}
     steps:
@@ -43,7 +43,7 @@ jobs:
 
   build:
     name: Build and push docker image (${{ matrix.device }})
-    runs-on: overflow
+    runs-on: ${{ github.repository_owner == 'open-edge-platform' && 'overflow' || 'ubuntu-latest' }}
     needs: check_paths
     if: needs.check_paths.outputs.run_workflow == 'true'
     strategy:
@@ -52,8 +52,9 @@ jobs:
         device: [cpu, xpu, cuda]
     permissions:
       contents: read
-      packages: write
-      pull-requests: write
+      packages: write # Push Docker images to GHCR
+      pull-requests: write # Post image size comments on PRs
+      id-token: write # Use OIDC token to sign images
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -67,7 +68,7 @@ jobs:
           echo "short_sha=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
-        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -75,7 +76,7 @@ jobs:
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
           images: ghcr.io/open-edge-platform/geti-${{ matrix.device }}
           tags: |
@@ -99,12 +100,41 @@ jobs:
           # cache export to avoid 403 errors from GHCR.
           cache-write: ${{ github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request' }}
 
-      - name: Smoke-test docker image
-        if: github.event_name == 'pull_request'
+      - name: Resolve primary image tag for signing
+        if: github.event_name != 'pull_request'
+        id: primary-tag
         env:
-          IMAGE: ${{ steps.docker_build.outputs.image-name }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # Use the first tag as the signing reference.
+          # The sign-image action resolves the digest from this tag via crane.
+          TAG="$(echo "$TAGS" | head -n1)"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign container image
+        if: github.event_name != 'pull_request'
+        uses: open-edge-platform/geti-ci/actions/sign-image@7e686c1248b3939f8ee8e04e2612da727e379d91
+        with:
+          image-uri: ${{ steps.primary-tag.outputs.tag }}
+
+      - name: Pull image for smoke test
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.meta.outputs.tags }}
+        run: |
+          # Extract first tag from the list
+          FIRST_TAG=$(echo "${IMAGE}" | head -n1)
+          echo "Pulling ${FIRST_TAG} for smoke test..."
+          docker pull "${FIRST_TAG}"
+
+      - name: Smoke-test docker image
+        env:
+          # For PRs use local image, for other events use first pushed tag
+          IMAGE_SOURCE: ${{ github.event_name == 'pull_request' && steps.docker_build.outputs.image-name || steps.meta.outputs.tags }}
           DEVICE: ${{ matrix.device }}
         run: |
+          # Extract first tag if IMAGE_SOURCE contains multiple lines
+          IMAGE=$(echo "${IMAGE_SOURCE}" | head -n1)
           CONTAINER_NAME="geti-healthcheck-${DEVICE}"
 
           echo "Starting container from ${IMAGE} ..."
@@ -146,13 +176,55 @@ jobs:
 
           docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
 
+      - name: Install Python, uv and Just
+        if: matrix.device == 'cpu'
+        uses: ./.github/actions/install-common-deps
+        with:
+          uv-version-file: application/backend/pyproject.toml # Install the uv version specified in pyproject.toml
+
+      - name: Prepare venv and install Python dependencies
+        if: matrix.device == 'cpu'
+        working-directory: application/backend
+        env:
+          GIT_LFS_SKIP_SMUDGE: "1" # Skip downloading LFS files for deps installed via git
+        run: just venv
+
+      - name: Run bdd tests
+        if: matrix.device == 'cpu'
+        working-directory: application/backend
+        env:
+          # For PRs use local image, for other events use first pushed tag
+          IMAGE_SOURCE: ${{ github.event_name == 'pull_request' && steps.docker_build.outputs.image-name || steps.meta.outputs.tags }}
+          RUNNER: docker
+          TESTCONTAINERS_RYUK_DISABLED: true
+        run: |
+          export IMAGE_TAG=$(echo "${IMAGE_SOURCE}" | head -n1)
+          export DOCKER_HOST=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
+          just test-bdd
+
       - name: Get Docker image size
         if: github.event_name == 'pull_request'
         id: image_size
         env:
           IMAGE: ${{ steps.docker_build.outputs.image-name }}
         run: |
-          SIZE_BYTES=$(docker image inspect "${IMAGE}" --format='{{.Size}}')
+          # docker image inspect .Size may undercount with the docker buildx
+          # driver because it only reports the diff/top-layer size.  Summing
+          # all layer sizes via `docker history` gives the true uncompressed
+          # on-disk total.
+          SIZE_BYTES=$(docker history "${IMAGE}" --format '{{.Size}}' \
+            | awk '
+                /[0-9]+(\.[0-9]+)?[kKmMgG]?[bB]/ {
+                  n = $1+0; unit = $1;
+                  gsub(/[0-9.]+/, "", unit);
+                  unit = toupper(unit);
+                  if (unit == "KB") n *= 1024;
+                  else if (unit == "MB") n *= 1024*1024;
+                  else if (unit == "GB") n *= 1024*1024*1024;
+                  total += n
+                }
+                END { printf "%d", total }
+              ')
           SIZE_MB=$(awk "BEGIN {printf \"%.1f\", ${SIZE_BYTES} / 1024 / 1024}")
           SIZE_GB=$(awk "BEGIN {printf \"%.2f\", ${SIZE_BYTES} / 1024 / 1024 / 1024}")
           echo "bytes=${SIZE_BYTES}" >> "$GITHUB_OUTPUT"
@@ -204,7 +276,7 @@ jobs:
     needs:
       - check_paths
       - build
-    runs-on: overflow
+    runs-on: ${{ github.repository_owner == 'open-edge-platform' && 'overflow' || 'ubuntu-latest' }}
     env:
       CHECKS: ${{ join(needs.*.result, ' ') }}
     if: always() && !cancelled()

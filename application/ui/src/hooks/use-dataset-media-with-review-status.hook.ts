@@ -1,0 +1,46 @@
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
+import { isEmpty } from 'lodash-es';
+
+import { useDatasetFiltersSearchParams } from './use-dataset-filters-search-params.hook';
+import { useGetDatasetItemsById } from './use-get-dataset-items-by-id.hook';
+import { useGetDatasetMediaItems } from './use-get-dataset-media-items.hook';
+
+export const useDatasetMediaWithReviewStatus = () => {
+    const { selectedLabelIds, annotationStatus, startDate, endDate } = useDatasetFiltersSearchParams();
+
+    const mediaItemsResponse = useGetDatasetMediaItems({
+        annotationStatus: annotationStatus ?? undefined,
+        labelIds: isEmpty(selectedLabelIds) ? undefined : selectedLabelIds,
+        startDate: startDate ?? undefined,
+        endDate: endDate ?? undefined,
+    });
+
+    const datasetItemsResponse = useGetDatasetItemsById({ annotationStatus: annotationStatus ?? undefined });
+    const hasPendingRequests = mediaItemsResponse.isPending || datasetItemsResponse.isPending;
+
+    const fetchNextPage = () => {
+        if (mediaItemsResponse.hasNextPage && !mediaItemsResponse.isFetchingNextPage) {
+            mediaItemsResponse.fetchNextPage();
+        }
+
+        if (datasetItemsResponse.hasNextPage && !datasetItemsResponse.isFetchingNextPage) {
+            datasetItemsResponse.fetchNextPage();
+        }
+    };
+
+    const isMediaItemReviewedById = (mediaItemId: string) => {
+        return datasetItemsResponse.reviewStatus.get(mediaItemId) ?? false;
+    };
+
+    return {
+        items: mediaItemsResponse.items,
+        isPending: hasPendingRequests,
+        isFetchingNextPage:
+            hasPendingRequests || mediaItemsResponse.isFetchingNextPage || datasetItemsResponse.isFetchingNextPage,
+        totalCount: mediaItemsResponse.totalCount,
+        fetchNextPage,
+        isMediaItemReviewedById,
+    };
+};

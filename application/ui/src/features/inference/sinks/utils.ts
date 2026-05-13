@@ -8,8 +8,8 @@ import type { components } from '../../../api/openapi-spec';
 export type LocalFolderSinkConfig = components['schemas']['FolderSinkConfigView'];
 export type MqttSinkConfig = components['schemas']['MqttSinkConfigView'];
 export type WebhookSinkConfig = components['schemas']['WebhookSinkConfigView'];
-export type DisconnectedSinkConfig = components['schemas']['RosSinkConfigView'];
-export type RosSinkConfig = components['schemas']['RosSinkConfigView'];
+type DisconnectedSinkConfig = components['schemas']['RosSinkConfigView'];
+type RosSinkConfig = components['schemas']['RosSinkConfigView'];
 export type SinkOutputFormats = LocalFolderSinkConfig['output_formats'];
 
 export type SinkConfig =
@@ -18,13 +18,6 @@ export type SinkConfig =
     | WebhookSinkConfig
     | DisconnectedSinkConfig
     | RosSinkConfig;
-
-export enum SinkType {
-    FOLDER = 'folder',
-    MQTT = 'mqtt',
-    ROS = 'ros',
-    WEBHOOK = 'webhook',
-}
 
 export enum OutputFormat {
     IMAGE_ORIGINAL = 'image_original',

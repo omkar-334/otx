@@ -97,6 +97,7 @@ class Video(BaseMedia):
     type: Literal[MediaType.VIDEO]
     fps: float
     frame_count: int
+    annotated_frame_count: int = 0
 
     @computed_field
     @property
@@ -146,6 +147,6 @@ class MediaPredictionRequest(BaseModel):
 
 class MediaListPredictionRequest(BaseModel):
     model_id: UUID
+    model_variant_id: UUID | None = None
     media: list[MediaPredictionRequest]
-    save_predictions: bool
     device: str

@@ -1,20 +1,20 @@
 # Copyright (C) 2025-2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for OTXDetectionDataset with DataAugSwitchMixin."""
+"""Integration tests for DetectionDataset with DataAugSwitchMixin."""
 
 from multiprocessing import Value
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from otx.backend.native.callbacks.aug_scheduler import DataAugSwitch
-from otx.data.dataset.detection import OTXDetectionDataset
-from otx.data.dataset.mixins import DataAugSwitchMixin
+from getitune.backend.lightning.callbacks.aug_scheduler import DataAugSwitch
+from getitune.data.dataset.detection import DetectionDataset
+from getitune.data.dataset.mixins import DataAugSwitchMixin
 
 
-class TestOTXDetectionDatasetWithAugSwitch:
-    """Integration tests for OTXDetectionDataset with DataAugSwitchMixin."""
+class TestDetectionDatasetWithAugSwitch:
+    """Integration tests for DetectionDataset with DataAugSwitchMixin."""
 
     @pytest.fixture
     def sample_policies(self):
@@ -23,7 +23,7 @@ class TestOTXDetectionDatasetWithAugSwitch:
             "no_aug": {
                 "augmentations_cpu": [
                     {
-                        "class_path": "otx.data.augmentation.transforms.Resize",
+                        "class_path": "getitune.data.augmentation.transforms.Resize",
                         "init_args": {"size": [640, 640], "keep_aspect_ratio": False},
                     },
                 ],
@@ -32,7 +32,7 @@ class TestOTXDetectionDatasetWithAugSwitch:
                 "augmentations_cpu": [
                     {"class_path": "torchvision.transforms.v2.RandomHorizontalFlip", "init_args": {"p": 0.5}},
                     {
-                        "class_path": "otx.data.augmentation.transforms.Resize",
+                        "class_path": "getitune.data.augmentation.transforms.Resize",
                         "init_args": {"size": [640, 640], "keep_aspect_ratio": False},
                     },
                 ],
@@ -41,7 +41,7 @@ class TestOTXDetectionDatasetWithAugSwitch:
                 "augmentations_cpu": [
                     {"class_path": "torchvision.transforms.v2.RandomVerticalFlip", "init_args": {"p": 0.5}},
                     {
-                        "class_path": "otx.data.augmentation.transforms.Resize",
+                        "class_path": "getitune.data.augmentation.transforms.Resize",
                         "init_args": {"size": [640, 640], "keep_aspect_ratio": False},
                     },
                 ],
@@ -49,7 +49,7 @@ class TestOTXDetectionDatasetWithAugSwitch:
             "light_aug": {
                 "augmentations_cpu": [
                     {
-                        "class_path": "otx.data.augmentation.transforms.Resize",
+                        "class_path": "getitune.data.augmentation.transforms.Resize",
                         "init_args": {"size": [640, 640], "keep_aspect_ratio": False},
                     },
                 ],
@@ -87,14 +87,14 @@ class TestOTXDetectionDatasetWithAugSwitch:
 
     @pytest.fixture
     def detection_dataset(self, mock_dm_subset):
-        """Create an OTXDetectionDataset instance."""
-        return OTXDetectionDataset(
+        """Create an DetectionDataset instance."""
+        return DetectionDataset(
             dm_subset=mock_dm_subset,
             transforms=None,
         )
 
     def test_detection_dataset_inherits_mixin(self, detection_dataset):
-        """Test that OTXDetectionDataset inherits from DataAugSwitchMixin."""
+        """Test that DetectionDataset inherits from DataAugSwitchMixin."""
         assert isinstance(detection_dataset, DataAugSwitchMixin)
 
     def test_detection_dataset_mixin_initialization(self, detection_dataset):
@@ -172,7 +172,7 @@ class TestOTXDetectionDatasetWithAugSwitch:
 
     def test_transforms_updated_correctly(self, detection_dataset, data_aug_switch):
         """Test that transforms are updated correctly when epoch changes."""
-        from otx.data.augmentation import CPUAugmentationPipeline
+        from getitune.data.augmentation import CPUAugmentationPipeline
 
         detection_dataset.set_data_aug_switch(data_aug_switch)
 
@@ -234,8 +234,8 @@ class TestOTXDetectionDatasetWithAugSwitch:
     def test_multiple_datasets_same_switch(self, mock_dm_subset, data_aug_switch):
         """Test multiple datasets sharing the same augmentation switch."""
         # Create multiple datasets
-        dataset1 = OTXDetectionDataset(dm_subset=mock_dm_subset, transforms=None)
-        dataset2 = OTXDetectionDataset(dm_subset=mock_dm_subset, transforms=None)
+        dataset1 = DetectionDataset(dm_subset=mock_dm_subset, transforms=None)
+        dataset2 = DetectionDataset(dm_subset=mock_dm_subset, transforms=None)
 
         # Set the same switch on both
         dataset1.set_data_aug_switch(data_aug_switch)
@@ -268,7 +268,7 @@ class TestOTXDetectionDatasetWithAugSwitch:
     def test_type_annotations_compatibility(self, detection_dataset):
         """Test that type annotations work correctly with mixin."""
         # This test ensures the type: ignore[misc] comment is working
-        assert isinstance(detection_dataset, OTXDetectionDataset)
+        assert isinstance(detection_dataset, DetectionDataset)
         assert isinstance(detection_dataset, DataAugSwitchMixin)
 
         # Test that all mixin methods are available
